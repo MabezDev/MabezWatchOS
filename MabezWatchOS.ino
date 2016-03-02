@@ -10,7 +10,9 @@ DS1302RTC RTC(12,11,13);
 String message;
 String toDisplay;
 int clockRadius = 32;
+int clockArray[3] = {0,0,0};
 tmElements_t tm;
+time_t t;
 
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
@@ -25,10 +27,8 @@ void draw(String text) {
   u8g_prepare();
   u8g.setPrintPos(0, 20); 
   u8g.print(text);
-  RTC.read(tm);
   
-  
-  drawClock(tm.Hour,tm.Minute,tm.Second);
+  drawClock(clockArray[0],clockArray[1],clockArray[2]);
   u8g.setPrintPos(0, 0); 
   u8g.print("cunt");
 }
@@ -83,8 +83,35 @@ void loop(void) {
     if(message!="")
     {//if data is available
       Serial.println(message); //show the data
-      if(message!=toDisplay){
-         toDisplay=message; 
+      if(message!=toDisplay){//handles reading in the date and time
+         toDisplay=message;
+         String dateNtime[2];
+         boolean after = true;
+         for(int i = 0; i< message.length();i++){//NEED TO DEBUG THIS HOLE ALGORITHM TO GET THE RIGHT TIME
+          if(after){
+           if(message.charAt(i)==' '){
+              after = false; 
+           } else {
+            dateNtime[0] += message.charAt(i);
+           }
+          } else {
+            dateNtime[1] += message.charAt(i);
+          }
+         }
+         int clockIndex = 0;
+         for(int j=0; j < dateNtime[1].length();j++){
+            if(dateNtime[1].charAt(j)==':'){
+              clockIndex++;
+            } else {
+              clockArray[clockIndex] += dateNtime[1].charAt(j) + '0';
+            }
+         }
+         RTC.read(tm);
+         if(!(tm.Hour == clockArray[0] && tm.Minute== clockArray[1])){
+            setClockTime(clockArray[0],clockArray[1]);
+         } else {
+          //rtc works fine
+         }
       }
       message=""; //clear the data
     }
@@ -96,7 +123,26 @@ void loop(void) {
   
   
   // rebuild the picture after some delay
-  //delay(150);
-
+  //delay(150)
 }
+
+void setClockTime(int hours,int minutes){
+  tm.Hour = hours;
+  tm.Minute = minutes;
+  t = makeTime(tm);
+  if(RTC.set(t) == 0) { // Success
+    setTime(t);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
 

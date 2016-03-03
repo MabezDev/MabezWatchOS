@@ -13,6 +13,10 @@ int clockRadius = 32;
 int clockArray[3] = {0,0,0};
 tmElements_t tm;
 time_t t;
+boolean gotUpdatedTime = false;
+
+int clockUpdateInterval = 10000;
+long prevMillis = 0;
 
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
@@ -27,10 +31,12 @@ void draw(String text) {
   u8g_prepare();
   u8g.setPrintPos(0, 20); 
   u8g.print(text);
-  
+  //updateClock();
   drawClock(clockArray[0],clockArray[1],clockArray[2]);
-  u8g.setPrintPos(0, 0); 
-  u8g.print("cunt");
+  /*u8g.setPrintPos(0, 0); 
+  u8g.print(clockArray[0]);
+  u8g.setPrintPos(0,20);
+  u8g.print(clockArray[1]);*/
 }
 
 void drawClock(int hour, int minute,int second){
@@ -50,6 +56,17 @@ void drawClock(int hour, int minute,int second){
   int xx2 = 64 + (sin(minutes) * (clockRadius/1.2));
   int yy2 = 32 - (cos(minutes) * (clockRadius/1.2));
   u8g.drawLine(64,32,xx2,yy2);//minute hand
+}
+
+void updateClock(){
+  long current = millis();
+  if(current - prevMillis >= clockUpdateInterval){
+    prevMillis = current;
+    RTC.read(tm);
+    clockArray[0] = tm.Hour;
+    clockArray[1] = tm.Minute;
+    clockArray[2] = tm.Second;
+  }
 }
 
 void setup(void) {
@@ -73,47 +90,61 @@ void loop(void) {
   u8g.firstPage();  
   do {
     
-    while(Serial.available())
+  while(Serial.available())
   {//while there is data available on the serial monitor
     message+=char(Serial.read());//store string from serial command
     delay(1);// very important else it cunts the message
   }
   if(!Serial.available())
   {
-    if(message!="")
-    {//if data is available
-      Serial.println(message); //show the data
-      if(message!=toDisplay){//handles reading in the date and time
-         toDisplay=message;
-         String dateNtime[2];
-         boolean after = true;
-         for(int i = 0; i< message.length();i++){//NEED TO DEBUG THIS HOLE ALGORITHM TO GET THE RIGHT TIME
-          if(after){
-           if(message.charAt(i)==' '){
-              after = false; 
-           } else {
-            dateNtime[0] += message.charAt(i);
-           }
-          } else {
-            dateNtime[1] += message.charAt(i);
-          }
-         }
-         int clockIndex = 0;
-         for(int j=0; j < dateNtime[1].length();j++){
-            if(dateNtime[1].charAt(j)==':'){
-              clockIndex++;
+    if(message!=""){
+      Serial.println("Message: "+message);
+      if(!gotUpdatedTime){
+        String dateNtime[2] = {"",""};
+        int spaceIndex = 0;
+           boolean after = true;
+           for(int i = 0; i< message.length();i++){//NEED TO DEBUG THIS HOLE ALGORITHM TO GET THE RIGHT TIME
+            if(after){
+             if(message.charAt(i)==' '){
+                spaceIndex++;
+                if(spaceIndex >= 3){
+                  after = false;
+                } 
+             } else {
+              dateNtime[0] += message.charAt(i);
+             }
             } else {
-              clockArray[clockIndex] += dateNtime[1].charAt(j) + '0';
+              dateNtime[1] += message.charAt(i);
             }
-         }
-         RTC.read(tm);
-         if(!(tm.Hour == clockArray[0] && tm.Minute== clockArray[1])){
-            setClockTime(clockArray[0],clockArray[1]);
-         } else {
-          //rtc works fine
-         }
+            
+           }
+           int clockIndex = 0;
+           String temp = "";
+           for(int j=0; j < dateNtime[1].length();j++){
+              if(dateNtime[1].charAt(j)==':'){
+                clockIndex++;
+                temp="";
+              } else {
+                temp += dateNtime[1].charAt(j);
+                clockArray[clockIndex] = temp.toInt();
+              }
+           }
+           RTC.read(tm);
+           if(!(tm.Hour == clockArray[0] && tm.Minute== clockArray[1])){
+              setClockTime(clockArray[0],clockArray[1]);
+              Serial.println("Setting the clock!");
+              //for(int z=0; z< sizeof(clockArray);z++){
+               // Serial.println(clockArray[z]);
+              //}
+           } else {
+            //rtc works fine
+           }
+           message="";
+           
       }
-      message=""; //clear the data
+    } else {
+      //we have no connection to phone use the time from the RTC
+       updateClock();
     }
   }
   draw(toDisplay);
@@ -132,6 +163,10 @@ void setClockTime(int hours,int minutes){
   t = makeTime(tm);
   if(RTC.set(t) == 0) { // Success
     setTime(t);
+    Serial.println("Writing time to RTC was successfull!");
+    gotUpdatedTime= true;
+  } else {
+    Serial.println("Writing to clock failed!");
   }
 }
 

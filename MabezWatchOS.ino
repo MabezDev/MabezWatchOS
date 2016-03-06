@@ -63,13 +63,6 @@ void drawClock(int hour, int minute,int second){
   u8g.drawLine(64,32,xxx2,yyy2);//second hand
 }
 
-void showNotifications(){
-    u8g.setPrintPos(0,5);
-    u8g.print(notifications[0].title);
-    u8g.setPrintPos(0,12);
-    u8g.print(notifications[0].text);
-}
-
 void updateClock(){
   long current = millis();
   if(current - prevMillis >= clockUpdateInterval){
@@ -94,25 +87,18 @@ void setup(void) {
   toDisplay ="";
   RTC.haltRTC(false);
   RTC.writeEN(false);
+  u8g_prepare();
   
 }
 
 void loop(void) {
   u8g.firstPage();  
   do {
-    //all display stuff is done in this loop
-    u8g_prepare();
-    if(pageIndex==0){
-      drawClock(clockArray[0],clockArray[1],clockArray[2]);
-    }else if(pageIndex==1){
-      for(int i=0; i < notificationIndex;i++){
-        u8g.setPrintPos(0,6*i);
-        u8g.print(notifications[i].title);
-        u8g.setPrintPos(0,(8*i)+10);
-        u8g.print(notifications[i].text);
-      }
+    switch(pageIndex){
+      case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
+      case 1: showNotifications(); break;
     }
-    u8g.setPrintPos(64,55);
+    u8g.setPrintPos(120,5);
     u8g.print(notificationIndex);
   } while( u8g.nextPage() );
     pageManager();
@@ -126,7 +112,7 @@ void loop(void) {
     if(!Serial.available())
     {
     if(message!=""){
-      Serial.println("Message: "+message);
+      //Serial.println("Message: "+message);
       /*
        * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
        */
@@ -136,6 +122,7 @@ void loop(void) {
         delay(500);  
       }else if(message.startsWith("<d>")){
         if(!gotUpdatedTime){
+          Serial.println(message);
           getTimeFromDevice(message);   
         }
       }
@@ -145,6 +132,15 @@ void loop(void) {
     }
     //Reset the message variable
     message="";
+  }
+}
+
+void showNotifications(){
+  for(int i=0; i < notificationIndex;i++){
+      u8g.setPrintPos(0,6*i);
+      u8g.print(notifications[i].title);
+      u8g.setPrintPos(0,(8*i)+10);
+      u8g.print(notifications[i].text);
   }
 }
 
@@ -222,7 +218,7 @@ void getTimeFromDevice(String message){
      //Compare to time from Device(only minutes and hours doesn't have to be perfect)
      if(!(tm.Hour == clockArray[0] && tm.Minute== clockArray[1])){
         setClockTime(clockArray[0],clockArray[1],clockArray[2]);
-        Serial.println("Setting the clock!");
+        Serial.println(F("Setting the clock!"));
      } else {
         //if it's correct we do not have to set the RTC and we just keep using the RTC's time
         gotUpdatedTime = true;
@@ -237,10 +233,10 @@ void setClockTime(int hours,int minutes,int seconds){// no need for seconds
   t = makeTime(tm);
   if(RTC.set(t) == 0) { // Success
     setTime(t);
-    Serial.println("Writing time to RTC was successfull!");
+    Serial.println(F("Writing time to RTC was successfull!"));
     gotUpdatedTime= true;
   } else {
-    Serial.println("Writing to clock failed!");
+    Serial.println(F("Writing to clock failed!"));
   }
 }
 

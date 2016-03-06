@@ -1,11 +1,18 @@
 #include "U8glib.h"
 #include <Time.h>
 #include <DS1302RTC.h>
+#include <SoftwareSerial.h>
 
-
+SoftwareSerial mySerial(7, 8); // RX, TX
 U8GLIB_SH1106_128X64 u8g(U8G_I2C_OPT_DEV_0|U8G_I2C_OPT_FAST); // Dev 0, Fast I2C / TWI
 DS1302RTC RTC(12,11,13);
 
+boolean button_ok = false;
+boolean lastb_ok = false;
+boolean button_up = false;
+boolean lastb_up = false;
+boolean button_down = false;
+boolean lastb_down = false;
 
 String message;
 String toDisplay;
@@ -16,9 +23,12 @@ time_t t;
 boolean gotUpdatedTime = false;
 boolean hasNotifications = false;
 int notificationIndex = 0;
-int itemsIndex = 0;
+//itemsint menuSelector = 0;
 
 int pageIndex = 0;
+int maxPages = 1;
+
+int menuSelector = 0;
 
 typedef struct{
   String packageName;
@@ -31,12 +41,26 @@ Notification notifications[10]; //current max of 10 notifications
 int clockUpdateInterval = 1000;
 long prevMillis = 1;
 
+int OK_BUTTON = 5;
+int DOWN_BUTTON = 3;
+int UP_BUTTON = 4;
+
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
   u8g.setFontRefHeightExtendedText();
   u8g.setDefaultForegroundColor();
   u8g.setFontPosTop();
 }
+
+/*
+ * RESEARCH:
+ * Might need to change HC-06 baud to something different than 9600 as it may be sending reste signals to the arduino (use soft serial?)
+ * UPDATE:
+ * THIS FIXED IT, working perfectly. Now need to got back to working on app to filter notifications.
+ * 
+ * TO DO:
+ * generate a structure for representing notifications
+ */
 
 
 void drawClock(int hour, int minute,int second){
@@ -61,6 +85,9 @@ void drawClock(int hour, int minute,int second){
   int xxx2 = 64 + (sin(seconds) * (clockRadius/1.2));
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.2));
   u8g.drawLine(64,32,xxx2,yyy2);//second hand
+
+  u8g.setPrintPos(120,5);
+  u8g.print(notificationIndex);
 }
 
 void updateClock(){
@@ -79,16 +106,78 @@ void setup(void) {
   // flip screen, if required
   //u8g.setRot180();
   Serial.begin(9600);
+  mySerial.begin(9600);
   #if defined(ARDUINO)
     pinMode(13, OUTPUT);           
     digitalWrite(13, HIGH);  
   #endif
-  pinMode(5,INPUT);
+  pinMode(OK_BUTTON,INPUT);
+  pinMode(DOWN_BUTTON,INPUT);
+  pinMode(UP_BUTTON,INPUT);
   toDisplay ="";
   RTC.haltRTC(false);
   RTC.writeEN(false);
   u8g_prepare();
   
+}
+
+void handleMenuInput(){
+
+  Serial.println(menuSelector);
+  
+  button_down = digitalRead(DOWN_BUTTON);
+  button_up = digitalRead(UP_BUTTON);
+  button_ok = digitalRead(OK_BUTTON);
+  
+  if (button_up != lastb_up) {
+    if (button_up == HIGH) {
+      menuSelector++;
+      if(menuSelector > notificationIndex){
+         menuSelector = 0; 
+      }
+    }
+    lastb_up = button_up;
+  }
+  
+  if (button_down != lastb_down) {
+    if (button_down == HIGH) {
+      menuSelector--;
+      if(menuSelector < 0){
+         menuSelector = notificationIndex; 
+      }
+    }
+    lastb_down = button_down;
+  } 
+  
+  if (button_ok != lastb_ok) {
+    if (button_ok == HIGH) {
+      if(menuSelector != notificationIndex){//last one is the back item
+        pageIndex = 2;
+      } else {
+        menuSelector = 0;//rest the selector
+        pageIndex = 0;// go back to list of notifications, remove the one we just looked at maybe?
+      }
+    }
+    lastb_ok = button_ok;
+  }
+   
+}
+
+void fullNotification(int chosenNotification){
+  // add code to represent the how notification
+  u8g.setPrintPos(0,0);
+  u8g.print(notifications[chosenNotification].title); 
+}
+
+void handleNotificationInput(){
+  button_ok = digitalRead(OK_BUTTON);
+  
+  if (button_ok != lastb_ok) {
+    if (button_ok == HIGH) {
+      pageIndex = 1;
+    }
+    lastb_ok = button_ok;
+  }
 }
 
 void loop(void) {
@@ -97,19 +186,22 @@ void loop(void) {
     switch(pageIndex){
       case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
       case 1: showNotifications(); break;
+      case 2: fullNotification(menuSelector); break;
     }
-    u8g.setPrintPos(120,5);
-    u8g.print(notificationIndex);
   } while( u8g.nextPage() );
-    pageManager();
-    //logic is done here
-    while(Serial.available())
+    switch(pageIndex){
+      case 0: clockInput(); break;
+      case 1: handleMenuInput(); break;
+      case 2: handleNotificationInput();break;
+    }
+    
+    while(mySerial.available())
     {
-      message+=char(Serial.read());//store string from serial command
+      message+=char(mySerial.read());//store string from serial command
       delay(1);// very important
     }
 
-    if(!Serial.available())
+    if(!mySerial.available())
     {
     if(message!=""){
       //Serial.println("Message: "+message);
@@ -117,8 +209,11 @@ void loop(void) {
        * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
        */
       if(message.startsWith("<n>")){
-        //think I need to change the app sending due to informatiopn cut off's and mis sends
-        getNotification(message);
+        if(notificationIndex > 10){
+          Serial.println("Recieved 10 messages!");
+        }else{
+          getNotification(message);
+        }
         delay(500);  
       }else if(message.startsWith("<d>")){
         if(!gotUpdatedTime){
@@ -136,21 +231,44 @@ void loop(void) {
 }
 
 void showNotifications(){
-  for(int i=0; i < notificationIndex;i++){
-      u8g.setPrintPos(0,6*i);
+  int startY = 0;
+  int x = 6;
+  for(int i=0; i < notificationIndex + 1;i++){
+     int y = 20*i;
+     u8g.drawFrame(x,startY,128,y+22);
+     if(i!=notificationIndex){
+      u8g.setPrintPos(x,y);
       u8g.print(notifications[i].title);
-      u8g.setPrintPos(0,(8*i)+10);
+      u8g.setPrintPos(x,y+10);
       u8g.print(notifications[i].text);
-  }
-}
-
-void pageManager(){
-  if(digitalRead(5)==HIGH){
-    pageIndex++;
-    if(pageIndex >= 2){
-      pageIndex = 0;
+      startY += y;
+    } else {
+      u8g.setPrintPos(x,y);
+      u8g.print("Back");
+    }
+    if(i==menuSelector){
+        u8g.setPrintPos(0,y+5);
+        u8g.print(">");
     }
   }
+  
+  
+}
+
+
+
+void clockInput(){
+  button_ok = digitalRead(OK_BUTTON);
+  
+  if (button_ok != lastb_ok) {
+    if (button_ok == HIGH) {
+      pageIndex++;
+      if(pageIndex > maxPages){
+         pageIndex = 0; 
+      }
+    }
+    lastb_ok = button_ok;
+  } 
   
 }
 
@@ -171,8 +289,6 @@ void getNotification(String notificationItem){
     } 
   }
   //add the text tot he current notification
-
-  
   notifications[notificationIndex].packageName = temp[0];
   notifications[notificationIndex].title = temp[1];
   notifications[notificationIndex].text = temp[2];

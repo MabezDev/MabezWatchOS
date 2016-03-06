@@ -14,8 +14,11 @@ int clockArray[3] = {0,0,0};
 tmElements_t tm;
 time_t t;
 boolean gotUpdatedTime = false;
-int notificationIndex = -1;
+boolean hasNotifications = false;
+int notificationIndex = 0;
 int itemsIndex = 0;
+
+int pageIndex = 0;
 
 typedef struct{
   String packageName;
@@ -26,7 +29,7 @@ typedef struct{
 Notification notifications[10]; //current max of 10 notifications
 
 int clockUpdateInterval = 1000;
-long prevMillis = 0;
+long prevMillis = 1;
 
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
@@ -35,12 +38,6 @@ void u8g_prepare(void) {
   u8g.setFontPosTop();
 }
 
-
-
-void draw() {
-  u8g_prepare();
-  drawClock(clockArray[0],clockArray[1],clockArray[2]);
-}
 
 void drawClock(int hour, int minute,int second){
   u8g.drawFrame(28,0,72,64);
@@ -66,6 +63,13 @@ void drawClock(int hour, int minute,int second){
   u8g.drawLine(64,32,xxx2,yyy2);//second hand
 }
 
+void showNotifications(){
+    u8g.setPrintPos(0,5);
+    u8g.print(notifications[0].title);
+    u8g.setPrintPos(0,12);
+    u8g.print(notifications[0].text);
+}
+
 void updateClock(){
   long current = millis();
   if(current - prevMillis >= clockUpdateInterval){
@@ -86,6 +90,7 @@ void setup(void) {
     pinMode(13, OUTPUT);           
     digitalWrite(13, HIGH);  
   #endif
+  pinMode(5,INPUT);
   toDisplay ="";
   RTC.haltRTC(false);
   RTC.writeEN(false);
@@ -93,14 +98,25 @@ void setup(void) {
 }
 
 void loop(void) {
-  
-  // picture loop  
   u8g.firstPage();  
   do {
     //all display stuff is done in this loop
-    draw();
+    u8g_prepare();
+    if(pageIndex==0){
+      drawClock(clockArray[0],clockArray[1],clockArray[2]);
+    }else if(pageIndex==1){
+      for(int i=0; i < notificationIndex;i++){
+        u8g.setPrintPos(0,6*i);
+        u8g.print(notifications[i].title);
+        u8g.setPrintPos(0,(8*i)+10);
+        u8g.print(notifications[i].text);
+      }
+    }
+    u8g.setPrintPos(64,55);
+    u8g.print(notificationIndex);
   } while( u8g.nextPage() );
-  //logic is done here
+    pageManager();
+    //logic is done here
     while(Serial.available())
     {
       message+=char(Serial.read());//store string from serial command
@@ -115,17 +131,14 @@ void loop(void) {
        * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
        */
       if(message.startsWith("<n>")){
-        notificationIndex++;
-        Serial.println("Notification Received.");
+        //think I need to change the app sending due to informatiopn cut off's and mis sends
         getNotification(message);
         delay(500);  
       }else if(message.startsWith("<d>")){
-        
         if(!gotUpdatedTime){
           getTimeFromDevice(message);   
         }
       }
-      
     } else {
       //we have no connection to phone use the time from the RTC
        updateClock();
@@ -135,14 +148,26 @@ void loop(void) {
   }
 }
 
+void pageManager(){
+  if(digitalRead(5)==HIGH){
+    pageIndex++;
+    if(pageIndex >= 2){
+      pageIndex = 0;
+    }
+  }
+  
+}
+
+
 void getNotification(String notificationItem){
-  //split the <i>
+  //split the <n>
   notificationItem.remove(0,3);
   String temp[3];
   int index = 0;
   for(int i=0; i < notificationItem.length();i++){
     char c = notificationItem.charAt(i);
     if(c=='<'){
+      //split the i and more the next item
       notificationItem.remove(i,2);
       index++;
     } else {
@@ -157,13 +182,7 @@ void getNotification(String notificationItem){
   notifications[notificationIndex].text = temp[2];
   Serial.println("Notification title: "+notifications[notificationIndex].title);
   Serial.println("Notification text: "+notifications[notificationIndex].text);
-}
-
-void printNotifications(){
-  u8g.setPrintPos(64,32);
-    for(int i=0; i < sizeof(notifications);i++){
-      Serial.println("A notification was stored.");
- }
+  notificationIndex++;
 }
 
 

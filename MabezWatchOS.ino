@@ -14,6 +14,16 @@ int clockArray[3] = {0,0,0};
 tmElements_t tm;
 time_t t;
 boolean gotUpdatedTime = false;
+int notificationIndex = -1;
+int itemsIndex = 0;
+
+typedef struct{
+  String packageName;
+  String title;
+  String text;
+} Notification;
+
+Notification notifications[10]; //current max of 10 notifications
 
 int clockUpdateInterval = 1000;
 long prevMillis = 0;
@@ -27,10 +37,8 @@ void u8g_prepare(void) {
 
 
 
-void draw(String text) {
+void draw() {
   u8g_prepare();
-  u8g.setPrintPos(0, 20); 
-  u8g.print(text);
   drawClock(clockArray[0],clockArray[1],clockArray[2]);
 }
 
@@ -90,7 +98,7 @@ void loop(void) {
   u8g.firstPage();  
   do {
     //all display stuff is done in this loop
-    draw(toDisplay);
+    draw();
   } while( u8g.nextPage() );
   //logic is done here
     while(Serial.available())
@@ -106,9 +114,18 @@ void loop(void) {
       /*
        * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
        */
-      if(!gotUpdatedTime){
-        getTimeFromDevice(message);   
+      if(message.startsWith("<n>")){
+        notificationIndex++;
+        Serial.println("Notification Received.");
+        getNotification(message);
+        delay(500);  
+      }else if(message.startsWith("<d>")){
+        
+        if(!gotUpdatedTime){
+          getTimeFromDevice(message);   
+        }
       }
+      
     } else {
       //we have no connection to phone use the time from the RTC
        updateClock();
@@ -118,8 +135,40 @@ void loop(void) {
   }
 }
 
+void getNotification(String notificationItem){
+  //split the <i>
+  notificationItem.remove(0,3);
+  String temp[3];
+  int index = 0;
+  for(int i=0; i < notificationItem.length();i++){
+    char c = notificationItem.charAt(i);
+    if(c=='<'){
+      notificationItem.remove(i,2);
+      index++;
+    } else {
+      temp[index]+= c;
+    } 
+  }
+  //add the text tot he current notification
+
+  
+  notifications[notificationIndex].packageName = temp[0];
+  notifications[notificationIndex].title = temp[1];
+  notifications[notificationIndex].text = temp[2];
+  Serial.println("Notification title: "+notifications[notificationIndex].title);
+  Serial.println("Notification text: "+notifications[notificationIndex].text);
+}
+
+void printNotifications(){
+  u8g.setPrintPos(64,32);
+    for(int i=0; i < sizeof(notifications);i++){
+      Serial.println("A notification was stored.");
+ }
+}
+
 
 void getTimeFromDevice(String message){
+  message.remove(0,3);
   String dateNtime[2] = {"",""};
   int spaceIndex = 0;
      boolean after = true;

@@ -185,10 +185,37 @@ void handleMenuInput(){
    
 }
 
-void fullNotification(int chosenNotification){
-  // add code to represent the how notification
+void fullNotification(int chosenNotification){ // this needs testing
+  int charsThatFit = 20;
+  int lines = 0;
+  String tempLine = "";
+  String lineArray[10]; //10 lines max atm;
+  String text = notifications[chosenNotification].text;
   u8g.setPrintPos(0,0);
-  u8g.print(notifications[chosenNotification].title); 
+  Serial.println(sizeof(text));
+  if(sizeof(text) < charsThatFit){
+    for(int i=0; i< sizeof(text); i++){
+      if(i >= charsThatFit){
+        lineArray[lines] = tempLine;
+        tempLine = "";
+        lines++;
+      } else {
+        tempLine += text.charAt(i);
+      }
+    }
+    int tempY = 0;
+    for(int j=0; j < lines;j++){
+      u8g.setPrintPos(0,tempY);
+      u8g.print(lineArray[j]);
+      tempY += 12;
+    }
+  } else {
+    u8g.print(text);
+  }
+  // need to work oput what fits on each line
+  //store ther line number so we know when to stop scrolling
+  //format it nicely
+  //work out how to delete the notification 
 }
 
 void handleNotificationInput(){

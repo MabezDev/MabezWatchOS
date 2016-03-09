@@ -16,19 +16,22 @@ boolean lastb_down = false;
 
 String message;
 String toDisplay;
+
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
+
 tmElements_t tm;
 time_t t;
+
 boolean gotUpdatedTime = false;
 boolean hasNotifications = false;
+
 int notificationIndex = 0;
-//itemsint menuSelector = 0;
-
 int pageIndex = 0;
-int maxPages = 1;
-
 int menuSelector = 0;
+
+const int x = 6;
+int y = 0;
 
 typedef struct{
   String packageName;
@@ -41,9 +44,14 @@ Notification notifications[10]; //current max of 10 notifications
 int clockUpdateInterval = 1000;
 long prevMillis = 1;
 
-int OK_BUTTON = 5;
-int DOWN_BUTTON = 3;
-int UP_BUTTON = 4;
+const int OK_BUTTON = 5;
+const int DOWN_BUTTON = 3;
+const int UP_BUTTON = 4;
+const int CLOCK_PAGE = 0;
+const int NOTIFICATION_MENU = 1;
+const int NOTIFICATION_BIG = 2;
+const int MAX_PAGES = 2;
+const int MENU_ITEM_HEIGHT = 16;
 
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
@@ -85,6 +93,7 @@ void drawClock(int hour, int minute,int second){
   int xxx2 = 64 + (sin(seconds) * (clockRadius/1.2));
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.2));
   u8g.drawLine(64,32,xxx2,yyy2);//second hand
+  
 
   u8g.setPrintPos(120,5);
   u8g.print(notificationIndex);
@@ -122,9 +131,6 @@ void setup(void) {
 }
 
 void handleMenuInput(){
-
-  Serial.println(menuSelector);
-  
   button_down = digitalRead(DOWN_BUTTON);
   button_up = digitalRead(UP_BUTTON);
   button_ok = digitalRead(OK_BUTTON);
@@ -135,6 +141,8 @@ void handleMenuInput(){
       if(menuSelector > notificationIndex){
          menuSelector = 0; 
       }
+      //check here if we need scroll up to get the next items on the screen
+      
     }
     lastb_up = button_up;
   }
@@ -145,6 +153,11 @@ void handleMenuInput(){
       if(menuSelector < 0){
          menuSelector = notificationIndex; 
       }
+      //check here if we nmeed to scroll down to get the next items
+      /*if(((menuSelector*22)> scrrenHeight) && (notificationIndex - menuSelector) >= 3){ //22 is height of item container
+        //scrollDown
+        
+      }*/
     }
     lastb_down = button_down;
   } 
@@ -152,10 +165,11 @@ void handleMenuInput(){
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
       if(menuSelector != notificationIndex){//last one is the back item
-        pageIndex = 2;
+        pageIndex = NOTIFICATION_BIG;
       } else {
+        //remove the notification
         menuSelector = 0;//rest the selector
-        pageIndex = 0;// go back to list of notifications, remove the one we just looked at maybe?
+        pageIndex = CLOCK_PAGE;// go back to list of notifications
       }
     }
     lastb_ok = button_ok;
@@ -192,7 +206,7 @@ void loop(void) {
     switch(pageIndex){
       case 0: clockInput(); break;
       case 1: handleMenuInput(); break;
-      case 2: handleNotificationInput();break;
+      case 2: handleNotificationInput(); break;
     }
     
     while(mySerial.available())
@@ -231,28 +245,23 @@ void loop(void) {
 }
 
 void showNotifications(){
-  int startY = 0;
-  int x = 6;
   for(int i=0; i < notificationIndex + 1;i++){
-     int y = 20*i;
-     u8g.drawFrame(x,startY,128,y+22);
-     if(i!=notificationIndex){
-      u8g.setPrintPos(x,y);
-      u8g.print(notifications[i].title);
-      u8g.setPrintPos(x,y+10);
-      u8g.print(notifications[i].text);
-      startY += y;
-    } else {
-      u8g.setPrintPos(x,y);
-      u8g.print("Back");
-    }
+    int startY = 0;
     if(i==menuSelector){
-        u8g.setPrintPos(0,y+5);
+        u8g.setPrintPos(0,y+3);
         u8g.print(">");
     }
+    if(i!=notificationIndex){
+     u8g.setPrintPos(x + 3,y + 3);
+     u8g.print(notifications[i].title);
+    } else {
+      u8g.setPrintPos(x + 3,y + 3);
+      u8g.print("Back");
+    }
+    y += MENU_ITEM_HEIGHT;
+    u8g.drawFrame(x,startY,128,y);
   }
-  
-  
+  y = 0;
 }
 
 
@@ -263,7 +272,7 @@ void clockInput(){
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
       pageIndex++;
-      if(pageIndex > maxPages){
+      if(pageIndex > MAX_PAGES){
          pageIndex = 0; 
       }
     }

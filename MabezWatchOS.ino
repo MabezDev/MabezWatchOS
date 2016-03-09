@@ -53,6 +53,8 @@ const int NOTIFICATION_BIG = 2;
 const int MAX_PAGES = 2;
 const int MENU_ITEM_HEIGHT = 16;
 
+int Y_OFFSET = 0;
+
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
   u8g.setFontRefHeightExtendedText();
@@ -135,13 +137,18 @@ void handleMenuInput(){
   button_up = digitalRead(UP_BUTTON);
   button_ok = digitalRead(OK_BUTTON);
   
-  if (button_up != lastb_up) {
+  if (button_up != lastb_up) {//issues here, need to figure out how to limit the menu slector and scroll down
     if (button_up == HIGH) {
       menuSelector++;
-      if(menuSelector > notificationIndex){
-         menuSelector = 0; 
+      //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
+      if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
+        //shift the y down
+        Serial.println("Scrolling Down 1 Item!");
+        Y_OFFSET -= MENU_ITEM_HEIGHT;
       }
-      //check here if we need scroll up to get the next items on the screen
+      if(menuSelector >= notificationIndex){
+         menuSelector = notificationIndex; 
+      }
       
     }
     lastb_up = button_up;
@@ -151,13 +158,14 @@ void handleMenuInput(){
     if (button_down == HIGH) {
       menuSelector--;
       if(menuSelector < 0){
-         menuSelector = notificationIndex; 
+         menuSelector = 0; 
       }
-      //check here if we nmeed to scroll down to get the next items
-      /*if(((menuSelector*22)> scrrenHeight) && (notificationIndex - menuSelector) >= 3){ //22 is height of item container
-        //scrollDown
-        
-      }*/
+      //plus y
+      if((menuSelector >= 3)){
+        Serial.println("Scrolling Down 1 Item!");
+        Y_OFFSET += MENU_ITEM_HEIGHT;
+      }
+      
     }
     lastb_down = button_down;
   } 
@@ -248,18 +256,18 @@ void showNotifications(){
   for(int i=0; i < notificationIndex + 1;i++){
     int startY = 0;
     if(i==menuSelector){
-        u8g.setPrintPos(0,y+3);
+        u8g.setPrintPos(0,y+3+Y_OFFSET);
         u8g.print(">");
     }
     if(i!=notificationIndex){
-     u8g.setPrintPos(x + 3,y + 3);
+     u8g.setPrintPos(x + 3,y + 3 + Y_OFFSET);
      u8g.print(notifications[i].title);
     } else {
-      u8g.setPrintPos(x + 3,y + 3);
+      u8g.setPrintPos(x + 3,y + 3 + Y_OFFSET);
       u8g.print("Back");
     }
     y += MENU_ITEM_HEIGHT;
-    u8g.drawFrame(x,startY,128,y);
+    u8g.drawFrame(x,startY,128,y +Y_OFFSET);
   }
   y = 0;
 }
@@ -275,6 +283,7 @@ void clockInput(){
       if(pageIndex > MAX_PAGES){
          pageIndex = 0; 
       }
+      Y_OFFSET = 0;
     }
     lastb_ok = button_ok;
   } 

@@ -14,8 +14,11 @@ boolean lastb_up = false;
 boolean button_down = false;
 boolean lastb_down = false;
 
-String message;
-String toDisplay;
+String message = "";
+
+char command[256];  
+char commandBuffer[128];  
+int commandBufferSize = 0;
 
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
@@ -125,7 +128,6 @@ void setup(void) {
   pinMode(OK_BUTTON,INPUT);
   pinMode(DOWN_BUTTON,INPUT);
   pinMode(UP_BUTTON,INPUT);
-  toDisplay ="";
   RTC.haltRTC(false);
   RTC.writeEN(false);
   u8g_prepare();
@@ -137,13 +139,12 @@ void handleMenuInput(){
   button_up = digitalRead(UP_BUTTON);
   button_ok = digitalRead(OK_BUTTON);
   
-  if (button_up != lastb_up) {//issues here, need to figure out how to limit the menu slector and scroll down
+  if (button_up != lastb_up) {
     if (button_up == HIGH) {
       menuSelector++;
       //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
       if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
         //shift the y down
-        Serial.println("Scrolling Down 1 Item!");
         Y_OFFSET -= MENU_ITEM_HEIGHT;
       }
       if(menuSelector >= notificationIndex){
@@ -185,33 +186,30 @@ void handleMenuInput(){
    
 }
 
-void fullNotification(int chosenNotification){ // this needs testing
+void fullNotification(int chosenNotification){
   int charsThatFit = 20;
+  int charIndex = 0;
   int lines = 0;
-  String tempLine = "";
-  String lineArray[10]; //10 lines max atm;
   String text = notifications[chosenNotification].text;
   u8g.setPrintPos(0,0);
-  Serial.println(sizeof(text));
-  if(sizeof(text) < charsThatFit){
-    for(int i=0; i< sizeof(text); i++){
-      if(i >= charsThatFit){
-        lineArray[lines] = tempLine;
-        tempLine = "";
+  if(text.length() > charsThatFit){
+    for(int i=0; i< text.length(); i++){
+      if(charIndex > charsThatFit){
         lines++;
+        charIndex = 0;
+        u8g.setPrintPos(0,lines * 10);
+        u8g.print(text.charAt(i));//print the char we miss
       } else {
-        tempLine += text.charAt(i);
+        u8g.print(text.charAt(i));//print each char till it wont fit
+        charIndex++;
       }
     }
-    int tempY = 0;
-    for(int j=0; j < lines;j++){
-      u8g.setPrintPos(0,tempY);
-      u8g.print(lineArray[j]);
-      tempY += 12;
-    }
+    u8g.setPrintPos(64,50);
+    u8g.print(lines);
   } else {
     u8g.print(text);
   }
+  
   // need to work oput what fits on each line
   //store ther line number so we know when to stop scrolling
   //format it nicely
@@ -246,36 +244,33 @@ void loop(void) {
     
     while(mySerial.available())
     {
-      message+=char(mySerial.read());//store string from serial command
-      delay(1);// very important
+      byte incoming = mySerial.read();
+      message+=char(incoming);//store string from serial command
     }
-
     if(!mySerial.available())
     {
     if(message!=""){
-      //Serial.println("Message: "+message);
-      /*
-       * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
-       */
-      if(message.startsWith("<n>")){
-        if(notificationIndex > 10){
-          Serial.println("Recieved 10 messages!");
-        }else{
-          getNotification(message);
+        Serial.println("Message: "+message);
+        /*
+         * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
+         */
+        if(message.startsWith("<n>")){
+          if(notificationIndex > 10){
+            Serial.println(F("Recieved 10 messages!"));
+          }else{
+            getNotification(message);
+          }
+        }else if(message.startsWith("<d>")){
+          if(!gotUpdatedTime){
+            getTimeFromDevice(message);   
+          }
         }
-        delay(500);  
-      }else if(message.startsWith("<d>")){
-        if(!gotUpdatedTime){
-          Serial.println(message);
-          getTimeFromDevice(message);   
-        }
+      } else {
+        //we have no connection to phone use the time from the RTC
+         updateClock();
       }
-    } else {
-      //we have no connection to phone use the time from the RTC
-       updateClock();
-    }
-    //Reset the message variable
-    message="";
+      //Reset the message variable
+      message="";
   }
 }
 
@@ -291,7 +286,7 @@ void showNotifications(){
      u8g.print(notifications[i].title);
     } else {
       u8g.setPrintPos(x + 3,y + 3 + Y_OFFSET);
-      u8g.print("Back");
+      u8g.print(F("Back"));
     }
     y += MENU_ITEM_HEIGHT;
     u8g.drawFrame(x,startY,128,y +Y_OFFSET);
@@ -337,8 +332,8 @@ void getNotification(String notificationItem){
   notifications[notificationIndex].packageName = temp[0];
   notifications[notificationIndex].title = temp[1];
   notifications[notificationIndex].text = temp[2];
-  Serial.println("Notification title: "+notifications[notificationIndex].title);
-  Serial.println("Notification text: "+notifications[notificationIndex].text);
+  //Serial.println("Notification title: "+notifications[notificationIndex].title);
+  //Serial.println("Notification text: "+notifications[notificationIndex].text);
   notificationIndex++;
 }
 

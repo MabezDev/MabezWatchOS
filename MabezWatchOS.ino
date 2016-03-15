@@ -3,7 +3,7 @@
 #include <DS1302RTC.h>
 #include <SoftwareSerial.h>
 
-SoftwareSerial mySerial(7, 8); // RX, TX
+SoftwareSerial mySerial(8, 7); // RX, TX
 U8GLIB_SH1106_128X64 u8g(U8G_I2C_OPT_DEV_0|U8G_I2C_OPT_FAST); // Dev 0, Fast I2C / TWI
 DS1302RTC RTC(12,11,13);
 
@@ -15,10 +15,6 @@ boolean button_down = false;
 boolean lastb_down = false;
 
 String message = "";
-
-char command[256];  
-char commandBuffer[128];  
-int commandBufferSize = 0;
 
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
@@ -50,6 +46,9 @@ long prevMillis = 1;
 const int OK_BUTTON = 5;
 const int DOWN_BUTTON = 3;
 const int UP_BUTTON = 4;
+
+const int VIBRATE_PIN = 10;
+
 const int CLOCK_PAGE = 0;
 const int NOTIFICATION_MENU = 1;
 const int NOTIFICATION_BIG = 2;
@@ -57,6 +56,7 @@ const int MAX_PAGES = 2;
 const int MENU_ITEM_HEIGHT = 16;
 
 int Y_OFFSET = 0;
+int y_notification = 0;
 
 void u8g_prepare(void) {
   u8g.setFont(u8g_font_6x10);
@@ -125,13 +125,19 @@ void setup(void) {
     pinMode(13, OUTPUT);           
     digitalWrite(13, HIGH);  
   #endif
+  pinMode(VIBRATE_PIN,OUTPUT);
   pinMode(OK_BUTTON,INPUT);
   pinMode(DOWN_BUTTON,INPUT);
   pinMode(UP_BUTTON,INPUT);
   RTC.haltRTC(false);
   RTC.writeEN(false);
   u8g_prepare();
-  
+
+  //create dummy notification for testing
+  notifications[notificationIndex].title = "Scott Mabin";
+  notifications[notificationIndex].text = "Lorem ipsum dolor sit amet, ius mutat blandit no. pleasersakljfdnhs kldfnskdjhfksljdhfkljshdfkjsdhfkljsjhfkjshfkljshdfkljsdfhklsjhfjkjdjdj asdjhkaksjdhgajkhsdgajkhsgdkjahgsdkjahgsdjkhasgdjkagsdkjhagdjhksad  DONE";
+  notifications[notificationIndex].packageName = "mabezdev";
+  notificationIndex++;
 }
 
 void handleMenuInput(){
@@ -191,13 +197,14 @@ void fullNotification(int chosenNotification){
   int charIndex = 0;
   int lines = 0;
   String text = notifications[chosenNotification].text;
-  u8g.setPrintPos(0,0);
+  u8g.setPrintPos(0,y_notification + Y_OFFSET);
   if(text.length() > charsThatFit){
     for(int i=0; i< text.length(); i++){
       if(charIndex > charsThatFit){
         lines++;
+        y_notification = lines * 10;
         charIndex = 0;
-        u8g.setPrintPos(0,lines * 10);
+        u8g.setPrintPos(0,y_notification + Y_OFFSET);
         u8g.print(text.charAt(i));//print the char we miss
       } else {
         u8g.print(text.charAt(i));//print each char till it wont fit
@@ -218,13 +225,30 @@ void fullNotification(int chosenNotification){
 
 void handleNotificationInput(){
   button_ok = digitalRead(OK_BUTTON);
+  button_down = digitalRead(DOWN_BUTTON);
+  button_up = digitalRead(UP_BUTTON);
   
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
+      y_notification = 0;
       pageIndex = 1;
     }
     lastb_ok = button_ok;
   }
+
+  if (button_up != lastb_up) {
+    if (button_up == HIGH) {
+        Y_OFFSET -= 10;
+    }
+    lastb_up = button_up;
+  }
+  
+  if (button_down != lastb_down) {
+    if (button_down == HIGH) {
+        Y_OFFSET += 10;
+    }
+    lastb_down = button_down;
+  } 
 }
 
 void loop(void) {
@@ -241,11 +265,15 @@ void loop(void) {
       case 1: handleMenuInput(); break;
       case 2: handleNotificationInput(); break;
     }
-    
-    while(mySerial.available())
-    {
-      byte incoming = mySerial.read();
-      message+=char(incoming);//store string from serial command
+    while(mySerial.available() > 0){
+      message += char(mySerial.read());
+
+      /*if(incoming == '*'){
+        Serial.println("Done! Here is the message: ");
+        Serial.println(message);
+      }
+      message.concat(char(incoming));//current issue is I cannot get messages longer than 64 characters due the the arduino's buffer size*/
+      //UPDATE: Softserial is the issue! I have created another sketch that uses normal serial and it works better
     }
     if(!mySerial.available())
     {
@@ -273,6 +301,7 @@ void loop(void) {
       message="";
   }
 }
+
 
 void showNotifications(){
   for(int i=0; i < notificationIndex + 1;i++){
@@ -335,6 +364,22 @@ void getNotification(String notificationItem){
   //Serial.println("Notification title: "+notifications[notificationIndex].title);
   //Serial.println("Notification text: "+notifications[notificationIndex].text);
   notificationIndex++;
+
+  alert();
+}
+
+void alert(){
+  //buzzes with vibration motor
+  //activates transistor that connects the buzzer with 3.3v
+  // due to the nature of transistors there is 0.7v drop
+  //bringing the voltage to 2.6v - which is safe for the motors
+    digitalWrite(VIBRATE_PIN,HIGH);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,LOW);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,HIGH);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,LOW);
 }
 
 

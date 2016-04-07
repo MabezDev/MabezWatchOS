@@ -253,11 +253,9 @@ void loop(void) {
       case 1: handleMenuInput(); break;
       //case 2: handleNotificationInput(); break;
     }
-    
     while(HWSERIAL.available())
     {
       byte incoming = HWSERIAL.read();
-      Serial.println("Recived: "+(char) incoming);
       message+=char(incoming);//store string from serial command
       delay(1);
     }
@@ -269,11 +267,7 @@ void loop(void) {
          * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
          */
         if(message.startsWith("<n>")){
-          if(notificationIndex > 10){
-            Serial.println(F("Recieved 10 messages!"));
-          }else{
             getNotification(message);
-          }
         }else if(message.startsWith("<d>")){
           if(!gotUpdatedTime){
             getTimeFromDevice(message);   
@@ -295,7 +289,7 @@ void showNotifications(){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
     if(i!=notificationIndex){
-     u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,stringToChar(notifications[i].title));
+     u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,stringToChar(notifications[i].title));//string to char only printing the first character, need to fix
     } else {
       u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
@@ -344,7 +338,7 @@ void clockInput(){
 void getNotification(String notificationItem){
   //split the <n>
   notificationItem.remove(0,3);
-  char* temp[3];
+  String temp[3];
   int index = 0;
   for(int i=0; i < notificationItem.length();i++){
     char c = notificationItem.charAt(i);
@@ -358,7 +352,7 @@ void getNotification(String notificationItem){
   }
   //add the text tot he current notification
   notifications[notificationIndex].packageName = temp[0];
-  notifications[notificationIndex].title =  temp[1];
+  notifications[notificationIndex].title = temp[1];
   notifications[notificationIndex].text = temp[2];
   Serial.println("Notification title: "+notifications[notificationIndex].title);
   Serial.println("Notification text: "+notifications[notificationIndex].text);

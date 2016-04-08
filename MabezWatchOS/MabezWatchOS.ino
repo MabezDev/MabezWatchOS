@@ -9,15 +9,9 @@ u8g_t u8g;
 DS1302RTC RTC(12,11,13);
 
 /*
- * 
- * SERIAL COMMUNICATIONS TILL WORKS ALTHOUGH NEED TO SWITCH FROM SOFT SER
- * need to rewrite display using layout u8g_Draw... function as this is the only way the display will work
- * As i do not have a knowledge to correctly implement this arm code into the lib
- * 
- * update -- started rewrite of code need to implment proper ways to get char array etc, might have a power problem need to charge batt/ use the new ones
- * REST NEEDS TO BE TESTED
- * 
- * 
+ * This has now been fully updated to the teensy 
+ * Todo: 
+ * Change transmission algorithm to catch failed sendings and to break up big messages to avoid packet loss
  */
 
 boolean button_ok = false;
@@ -47,13 +41,15 @@ int pageIndex = 0;
 int menuSelector = 0;
 
 const int x = 6;
-int y = 0; // needed cuz the font starts fromt he top now 
+int y = 0; 
 
 typedef struct{
   String packageName;
   String title;
   String text;
 } Notification;
+
+extern unsigned long _estack; 
 
 Notification notifications[10]; //current max of 10 notifications
 
@@ -70,24 +66,13 @@ const int MAX_PAGES = 2;
 const int MENU_ITEM_HEIGHT = 16;
 
 int Y_OFFSET = 0;
-//need to add this to the y for all DrawStr functions
-const int FONT_HEIGHT = 12;
+
+const int FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
 
 void u8g_prepare(void) {
   u8g_InitComFn(&u8g, &u8g_dev_sh1106_128x64_2x_i2c, u8g_com_hw_i2c_fn);
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
-
-/*
- * RESEARCH:
- * Might need to change HC-06 baud to something different than 9600 as it may be sending reste signals to the arduino (use soft serial?)
- * UPDATE:
- * THIS FIXED IT, working perfectly. Now need to got back to working on app to filter notifications.
- * 
- * TO DO:
- * generate a structure for representing notifications
- */
-
 
 void drawClock(int hour, int minute,int second){
   u8g_DrawFrame(&u8g,28,0,72,64);
@@ -111,8 +96,11 @@ void drawClock(int hour, int minute,int second){
   int xxx2 = 64 + (sin(seconds) * (clockRadius/1.2));
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.2));
   u8g_DrawLine(&u8g,64,32,xxx2,yyy2);//second hand
-  
-  u8g_DrawStr(&u8g,120,8+FONT_HEIGHT,intToChar(notificationIndex));
+
+  String toString = String(notificationIndex);
+  char number[toString.length()];
+  stringToChar(toString,number);
+  u8g_DrawStr(&u8g,120,8+FONT_HEIGHT,number);
 }
 
 void updateClock(){
@@ -187,7 +175,7 @@ void handleMenuInput(){
       if(menuSelector != notificationIndex){//last one is the back item
         pageIndex = NOTIFICATION_BIG;
       } else {
-        //remove the notification
+        //todo: remove the notification once read
         menuSelector = 0;//rest the selector
         pageIndex = CLOCK_PAGE;// go back to list of notifications
       }
@@ -198,35 +186,37 @@ void handleMenuInput(){
 }
 
 //need to implment this but its too much to bother with right now
-/*void fullNotification(int chosenNotification){
+void fullNotification(int chosenNotification){
   int charsThatFit = 20;
   int charIndex = 0;
   int lines = 0;
-  String textInput = notifications[chosenNotification].text;
-  char text[textInput.length()];
-  textInput.toCharArray(text,textInput.length()); 
  
-  if(text.length() > charsThatFit){
-    for(int i=0; i< text.length(); i++){
+  char text[notifications[chosenNotification].text.length()];
+  stringToChar(notifications[chosenNotification].text,text);
+
+  String linesArray[(notifications[chosenNotification].text.length()/charsThatFit)+2];
+ 
+  if(notifications[chosenNotification].text.length() > charsThatFit){
+    for(int i=0; i< notifications[chosenNotification].text.length(); i++){
       if(charIndex > charsThatFit){
+        linesArray[lines] += text[i];
         lines++;
         charIndex = 0;
-        u8g_DrawStr(&u8g,0,lines * 10,text[i]);//print the char we miss
       } else {
-        u8g_DrawStr(&u8g,0,lines * 10,text[i]);//print each char till it wont fit
+        linesArray[lines] += text[i];
         charIndex++;
       }
     }
-    //print line number here
+    for(int j=0; j < lines + 1; j++){
+      char lineToDraw[25] = {' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',
+      ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};//have to define these as space else previous lines leak into the next
+      stringToChar(linesArray[j],lineToDraw);
+      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT,lineToDraw);
+    }
   } else {
-    u8g_DrawStr(&u8g,0,0,text);
+    u8g_DrawStr(&u8g,0,FONT_HEIGHT,text);
   }
-  
-  // need to work oput what fits on each line
-  //store ther line number so we know when to stop scrolling
-  //format it nicely
-  //work out how to delete the notification 
-}*/
+}
 
 void handleNotificationInput(){
   button_ok = digitalRead(OK_BUTTON);
@@ -245,13 +235,13 @@ void loop(void) {
     switch(pageIndex){
       case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
       case 1: showNotifications(); break;
-      //case 2: fullNotification(menuSelector); break;
+      case 2: fullNotification(menuSelector); break;
     }
   } while( u8g_NextPage(&u8g) );
     switch(pageIndex){
       case 0: clockInput(); break;
       case 1: handleMenuInput(); break;
-      //case 2: handleNotificationInput(); break;
+      case 2: handleNotificationInput(); break;
     }
     while(HWSERIAL.available())
     {
@@ -263,6 +253,7 @@ void loop(void) {
     {
     if(message!=""){
         Serial.println("Message: "+message);
+        Serial.println(FreeRam());
         /*
          * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
          */
@@ -272,6 +263,9 @@ void loop(void) {
           if(!gotUpdatedTime){
             getTimeFromDevice(message);   
           }
+        } else if(message.startsWith("<t>")){
+          Serial.print("Number of notifications: ");
+          Serial.println(notificationIndex);
         }
       } else {
         //we have no connection to phone use the time from the RTC
@@ -282,14 +276,24 @@ void loop(void) {
   }
 }
 
+uint32_t FreeRam() { // for Teensy 3.0
+    uint32_t heapTop;
+    void* foo = malloc(1);
+    heapTop = (uint32_t) foo;
+    free(foo);
+    return (unsigned long)&_estack - heapTop;
+}
+
 void showNotifications(){
   for(int i=0; i < notificationIndex + 1;i++){
-    int startY = 0;//introducing the new u8glib the text is offsetted wrong
+    int startY = 0;
     if(i==menuSelector){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
     if(i!=notificationIndex){
-     u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,stringToChar(notifications[i].title));//string to char only printing the first character, need to fix
+      char title[notifications[i].title.length()];
+      stringToChar(notifications[i].title,title);
+      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,title);//string to char only printing the first character, need to fix
     } else {
       u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
@@ -299,21 +303,10 @@ void showNotifications(){
   y = 0;
 }
 
-char* stringToChar(String s){
-  char buf[s.length()];
+void stringToChar(String s, char* buf){
   for(int i = 0; i < s.length();i++){
     buf[i] = (char) s.charAt(i);
   }
-  return buf;
-}
-
-char* intToChar(int i){
-  String s = String(i);
-  char buf[s.length()];
-  for(int i = 0; i < s.length();i++){
-    buf[i] = (char) s.charAt(i);
-  }
-  return buf;
 }
 
 

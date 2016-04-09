@@ -26,10 +26,6 @@ String finalData = "";
 int chunkCount = 0;
 boolean readyToProcess = false;
 
-char command[256];  
-char commandBuffer[128];  
-int commandBufferSize = 0;
-
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
 
@@ -42,6 +38,9 @@ boolean hasNotifications = false;
 int notificationIndex = 0;
 int pageIndex = 0;
 int menuSelector = 0;
+
+int lineCount = 0;
+int currentLine = 0;
 
 const int x = 6;
 int y = 0; 
@@ -180,7 +179,9 @@ void handleMenuInput(){
       } else {
         //todo: remove the notification once read
         menuSelector = 0;//rest the selector
+        Y_OFFSET = 0;//reset any scrolling done
         pageIndex = CLOCK_PAGE;// go back to list of notifications
+        
       }
     }
     lastb_ok = button_ok;
@@ -211,11 +212,12 @@ void fullNotification(int chosenNotification){
       }
     }
     for(int j=0; j < lines + 1; j++){
-      char lineToDraw[25] = {' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',
-      ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};//have to define these as space else previous lines leak into the next
+      char lineToDraw[32] = {' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',
+      ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};//should make this 32 to fill a whole row
       stringToChar(linesArray[j],lineToDraw);
-      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT,lineToDraw);
+      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET,lineToDraw);
     }
+    lineCount = lines;
   } else {
     u8g_DrawStr(&u8g,0,FONT_HEIGHT,text);
   }
@@ -223,13 +225,40 @@ void fullNotification(int chosenNotification){
 
 void handleNotificationInput(){
   button_ok = digitalRead(OK_BUTTON);
+  button_down = digitalRead(DOWN_BUTTON);
+  button_up = digitalRead(UP_BUTTON);
   
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
-      pageIndex = 1;
+      Y_OFFSET = 0;
+      lineCount = 0;//reset number of lines
+      currentLine = 0;// reset currentLine back to zero
+      pageIndex = NOTIFICATION_MENU;
     }
     lastb_ok = button_ok;
   }
+
+  if (button_up != lastb_up) {
+    if (button_up == HIGH) {
+      if( (lineCount - currentLine) >= 6){
+        //this scrolls down
+        Y_OFFSET -= FONT_HEIGHT;
+        currentLine++;
+      }
+    }
+    lastb_up = button_up;
+  }
+  
+  if (button_down != lastb_down) {
+    if (button_down == HIGH) {
+      if(currentLine > 0){
+        //scrolls back up
+        Y_OFFSET += FONT_HEIGHT;
+        currentLine--;
+      }
+    }
+    lastb_down = button_down;
+  } 
 }
 
 void loop(void) {
@@ -267,10 +296,6 @@ void loop(void) {
         } else {
           readyToProcess = true;
         }
-        Serial.println(finalData);
-        /*
-         * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
-         */
       } else {
         //we have no connection to phone use the time from the RTC
          updateClock();
@@ -279,15 +304,23 @@ void loop(void) {
       message="";
   }
 
+  /*
+   * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
+   */
   if(readyToProcess){
     // add a clause here to reset all variables if data data start is not recognized.
     if(finalData.startsWith("<n>")){
-      Serial.println("Processing new notification");
-          newGetNotification(finalData);
+          getNotification(finalData);
     }else if(finalData.startsWith("<d>")){
       if(!gotUpdatedTime){
         getTimeFromDevice(message);   
       }
+    } else {
+      Serial.println("Received data with unknown tag");
+      //reset used variables
+      readyToProcess = false;
+      chunkCount = 0;
+      finalData = "";
     }
   }
 }
@@ -343,20 +376,6 @@ void clockInput(){
   
 }
 
-void newGetNotification(String notificationString){
-  Serial.println("Recevied: "+notificationString);
-  //split the pkg name
-  //split the title
-  //split after <e> the rest is text data
-  
-
-
-  //reset used variables
-  readyToProcess = false;
-  chunkCount = 0;
-  finalData = "";
-}
-
 
 void getNotification(String notificationItem){
   //split the <n>
@@ -380,6 +399,11 @@ void getNotification(String notificationItem){
   Serial.println("Notification title: "+notifications[notificationIndex].title);
   Serial.println("Notification text: "+notifications[notificationIndex].text);
   notificationIndex++;
+
+  //reset used variables
+  readyToProcess = false;
+  chunkCount = 0;
+  finalData = "";
 }
 
 

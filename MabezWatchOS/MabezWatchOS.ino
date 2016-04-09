@@ -22,6 +22,9 @@ boolean button_down = false;
 boolean lastb_down = false;
 
 String message = "";
+String finalData = "";
+int chunkCount = 0;
+boolean readyToProcess = false;
 
 char command[256];  
 char commandBuffer[128];  
@@ -252,27 +255,40 @@ void loop(void) {
     if(!HWSERIAL.available())
     {
     if(message!=""){
-        Serial.println("Message: "+message);
-        Serial.println(FreeRam());
+        if(message!="<f>"){
+          if(message.startsWith("<i>")){
+            message.remove(0,3);
+            chunkCount++;
+            finalData+=message;
+          } else {
+            finalData+=message;
+          }
+          
+        } else {
+          readyToProcess = true;
+        }
+        Serial.println(finalData);
         /*
          * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
          */
-        if(message.startsWith("<n>")){
-            getNotification(message);
-        }else if(message.startsWith("<d>")){
-          if(!gotUpdatedTime){
-            getTimeFromDevice(message);   
-          }
-        } else if(message.startsWith("<t>")){
-          Serial.print("Number of notifications: ");
-          Serial.println(notificationIndex);
-        }
       } else {
         //we have no connection to phone use the time from the RTC
          updateClock();
       }
       //Reset the message variable
       message="";
+  }
+
+  if(readyToProcess){
+    // add a clause here to reset all variables if data data start is not recognized.
+    if(finalData.startsWith("<n>")){
+      Serial.println("Processing new notification");
+          newGetNotification(finalData);
+    }else if(finalData.startsWith("<d>")){
+      if(!gotUpdatedTime){
+        getTimeFromDevice(message);   
+      }
+    }
   }
 }
 
@@ -325,6 +341,20 @@ void clockInput(){
     lastb_ok = button_ok;
   } 
   
+}
+
+void newGetNotification(String notificationString){
+  Serial.println("Recevied: "+notificationString);
+  //split the pkg name
+  //split the title
+  //split after <e> the rest is text data
+  
+
+
+  //reset used variables
+  readyToProcess = false;
+  chunkCount = 0;
+  finalData = "";
 }
 
 

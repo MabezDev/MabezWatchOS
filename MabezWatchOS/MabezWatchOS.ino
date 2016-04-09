@@ -9,9 +9,10 @@ u8g_t u8g;
 DS1302RTC RTC(12,11,13);
 
 /*
- * This has now been fully updated to the teensy 
+ * This has now been fully updated to the teensy, with an improved transmission algorithm. 
  * Todo: 
- * Change transmission algorithm to catch failed sendings and to break up big messages to avoid packet loss
+ * Maybe add a micro sd card(might be over kill) to store notification text on, just leave the titles in memory as we cant store many in memeory atm
+ * 6 is just enough atm hopefully
  */
 
 boolean button_ok = false;
@@ -36,6 +37,8 @@ boolean gotUpdatedTime = false;
 boolean hasNotifications = false;
 
 int notificationIndex = 0;
+int notificationMax = 6;
+
 int pageIndex = 0;
 int menuSelector = 0;
 
@@ -53,7 +56,7 @@ typedef struct{
 
 extern unsigned long _estack; 
 
-Notification notifications[10]; //current max of 10 notifications
+Notification notifications[6];
 
 int clockUpdateInterval = 1000;
 long prevMillis = 1;
@@ -310,10 +313,18 @@ void loop(void) {
   if(readyToProcess){
     // add a clause here to reset all variables if data data start is not recognized.
     if(finalData.startsWith("<n>")){
-          getNotification(finalData);
+          if(!(notificationIndex >= notificationMax)){
+            getNotification(finalData);
+          } else {
+            Serial.println("Hit max notifications, need to pop off some");
+            //reset used variables
+            readyToProcess = false;
+            chunkCount = 0;
+            finalData = "";
+          }
     }else if(finalData.startsWith("<d>")){
       if(!gotUpdatedTime){
-        getTimeFromDevice(message);   
+        getTimeFromDevice(finalData);   
       }
     } else {
       Serial.println("Received data with unknown tag");
@@ -400,6 +411,9 @@ void getNotification(String notificationItem){
   Serial.println("Notification text: "+notifications[notificationIndex].text);
   notificationIndex++;
 
+  Serial.print("Free RAM:");
+  Serial.println(FreeRam());
+
   //reset used variables
   readyToProcess = false;
   chunkCount = 0;
@@ -448,6 +462,10 @@ void getTimeFromDevice(String message){
         //if it's correct we do not have to set the RTC and we just keep using the RTC's time
         gotUpdatedTime = true;
      }
+     
+     //reset
+     finalData = "";
+     readyToProcess = false;
 }
 
 

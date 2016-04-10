@@ -13,6 +13,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  * Todo: 
  * Maybe add a micro sd card(might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
  * 6 is just enough atm hopefully
+ * Maybe use teensy 3.2, more powerful, with 64k RAM
  */
 
 boolean button_ok = false;
@@ -29,6 +30,10 @@ boolean readyToProcess = false;
 
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
+
+String weatherDay = "";
+String weatherTemperature = "";
+String weatherForecast = "";
 
 tmElements_t tm;
 time_t t;
@@ -309,6 +314,7 @@ void loop(void) {
    * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
    */
   if(readyToProcess){
+    
     if(finalData.startsWith("<n>")){
           if(!(notificationIndex >= notificationMax)){
             getNotification(finalData);
@@ -320,11 +326,38 @@ void loop(void) {
       if(!gotUpdatedTime){
         getTimeFromDevice(finalData);   
       }
+    } else if(finalData.startsWith("<w>")){
+      getWeatherData(finalData);
     } else {
       Serial.println("Received data with unknown tag");
       resetTransmissionData();
     }
   }
+}
+
+void getWeatherData(String finalData){
+  Serial.print("Weather data: ");
+  Serial.println(finalData);
+  finalData.remove(0,3); //remove the tag
+  String temp[3];
+  int index = 0;
+  for(int i=0; i < finalData.length();i++){
+    char c = finalData.charAt(i);
+    if(c=='<'){
+      //split the t and more the next item
+      finalData.remove(i,2);
+      index++;
+    } else {
+      temp[index]+= c;
+    } 
+  }
+  weatherDay = temp[0];
+  weatherTemperature = temp[1];
+  weatherForecast = temp[2];
+  Serial.println("Day: "+weatherDay);
+  Serial.println("Temperature: "+weatherTemperature);
+  Serial.println("Forecast: "+weatherForecast);
+  resetTransmissionData();
 }
 
 int FreeRam() {

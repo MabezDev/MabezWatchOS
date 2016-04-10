@@ -1,5 +1,4 @@
 #include <u8g_i2c.h>
-#include <Arduino.h>
 #include <i2c_t3.h>
 #include <Time.h>
 #include <DS1302RTC.h>
@@ -9,11 +8,11 @@ u8g_t u8g;
 DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
 /*
- * This has now been fully updated to the teensy, with an improved transmission algorithm. 
+ * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
  * Todo: 
  * Maybe add a micro sd card(might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
  * 6 is just enough atm hopefully
- * Maybe use teensy 3.2, more powerful, with 64k RAM
+ * Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
  */
 
 boolean button_ok = false;
@@ -27,13 +26,15 @@ String message = "";
 String finalData = "";
 int chunkCount = 0;
 boolean readyToProcess = false;
+boolean receiving = false;
 
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
 
-String weatherDay = "";
-String weatherTemperature = "";
-String weatherForecast = "";
+boolean weatherData = false;
+String weatherDay = "Sun";
+String weatherTemperature = "24 C";
+String weatherForecast = "Showers";
 
 tmElements_t tm;
 time_t t;
@@ -46,6 +47,7 @@ int notificationMax = 6;
 
 int pageIndex = 0;
 int menuSelector = 0;
+boolean shouldRemove = false;
 
 int lineCount = 0;
 int currentLine = 0;
@@ -60,7 +62,6 @@ typedef struct{
 } Notification;
 
 #ifdef __arm__
-  // should use uinstd.h to define sbrk but Due causes a conflict
   extern "C" char* sbrk(int incr);
 #else  // __ARM__
   extern char *__brkval;
@@ -91,32 +92,53 @@ void u8g_prepare(void) {
 }
 
 void drawClock(int hour, int minute,int second){
-  u8g_DrawFrame(&u8g,28,0,72,64);
-  u8g_DrawLine(&u8g,64,0,64,5);//top notch
-  u8g_DrawStr(&u8g,59,5+FONT_HEIGHT,"12");
-  u8g_DrawLine(&u8g,64,64,64,59);//bottom notch
-  u8g_DrawLine(&u8g,28,32,33,32);//left notch
-  u8g_DrawLine(&u8g,99,32,94,32);//right notch
+  //u8g_DrawFrame(&u8g,28,0,72,64);
+  u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
+  //u8g_DrawLine(&u8g,64,0,64,5);//top notch
+  u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
+  //u8g_DrawLine(&u8g,64,64,64,59);//bottom notch
+  //u8g_DrawLine(&u8g,28,32,33,32);//left notch
+  //u8g_DrawLine(&u8g,99,32,94,32);//right notch
 
   float hours = ((hour * 30)* (PI/180));
-  int x2 = 64 + (sin(hours) * (clockRadius/2));
+  int x2 = 32 + (sin(hours) * (clockRadius/2));
   int y2 = 32 - (cos(hours) * (clockRadius/2));
-  u8g_DrawLine(&u8g,64,32,x2,y2); //hour hand
+  u8g_DrawLine(&u8g,32,32,x2,y2); //hour hand
 
   float minutes = ((minute * 6) * (PI/180));
-  int xx2 = 64 + (sin(minutes) * (clockRadius/1.2));
-  int yy2 = 32 - (cos(minutes) * (clockRadius/1.2));
-  u8g_DrawLine(&u8g,64,32,xx2,yy2);//minute hand
+  int xx2 = 32 + (sin(minutes) * (clockRadius/1.4));
+  int yy2 = 32 - (cos(minutes) * (clockRadius/1.4));
+  u8g_DrawLine(&u8g,32,32,xx2,yy2);//minute hand
 
   float seconds = ((second * 6) * (PI/180));
-  int xxx2 = 64 + (sin(seconds) * (clockRadius/1.2));
-  int yyy2 = 32 - (cos(seconds) * (clockRadius/1.2));
-  u8g_DrawLine(&u8g,64,32,xxx2,yyy2);//second hand
+  int xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
+  int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
+  u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
 
   String toString = String(notificationIndex);
   char number[toString.length()];
   stringToChar(toString,number);
-  u8g_DrawStr(&u8g,120,8+FONT_HEIGHT,number);
+  u8g_DrawStr(&u8g,120,3+FONT_HEIGHT,number);
+
+  if(weatherData){
+    //change fonts
+    char wDay[weatherDay.length()];
+    stringToChar(weatherDay,wDay);
+    //when we change fonts add that font height not the default!
+    //or add a function to change the font and get the font height progmatically
+    u8g_DrawStr(&u8g,68,10+FONT_HEIGHT,wDay);
+  
+    char wTemp[weatherTemperature.length()];
+    stringToChar(weatherTemperature,wTemp);
+    u8g_DrawStr(&u8g,68,20+FONT_HEIGHT,wTemp);
+  
+    char wForecast[weatherForecast.length()];
+    stringToChar(weatherForecast,wForecast);
+    u8g_DrawStr(&u8g,68,30+FONT_HEIGHT,wForecast);
+  } else {
+    //display something else
+  }
+  
 }
 
 void updateClock(){
@@ -183,7 +205,6 @@ void handleMenuInput(){
       if(menuSelector != notificationIndex){//last one is the back item
         pageIndex = NOTIFICATION_BIG;
       } else {
-        //todo: remove the notification once read
         menuSelector = 0;//rest the selector
         Y_OFFSET = 0;//reset any scrolling done
         pageIndex = CLOCK_PAGE;// go back to list of notifications
@@ -193,6 +214,19 @@ void handleMenuInput(){
     lastb_ok = button_ok;
   }
    
+}
+
+void removeNotification(int pos){
+  if ( pos >= notificationIndex + 1 ){
+    Serial.println("Can't delete notification.");
+  } else {
+    for ( int c = pos ; c < notificationIndex ; c++ ){
+       notifications[c] = notifications[c+1];
+    }
+  }
+  //lower the index
+  Serial.println("Removed notification at position: "+pos);
+  notificationIndex--;
 }
 
 //need to implment this but its too much to bother with right now
@@ -219,7 +253,7 @@ void fullNotification(int chosenNotification){
     }
     for(int j=0; j < lines + 1; j++){
       char lineToDraw[32] = {' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',
-      ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};//should make this 32 to fill a whole row
+      ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};//32 to fill a whole row
       stringToChar(linesArray[j],lineToDraw);
       u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET,lineToDraw);
     }
@@ -236,6 +270,8 @@ void handleNotificationInput(){
   
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
+      //sets flag for removal of this notification
+      shouldRemove = true;
       Y_OFFSET = 0;
       lineCount = 0;//reset number of lines
       currentLine = 0;// reset currentLine back to zero
@@ -290,7 +326,16 @@ void loop(void) {
     if(!HWSERIAL.available())
     {
     if(message!=""){
-        if(message!="<f>"){
+        if(!receiving && message.startsWith("<")){
+          receiving = true;
+        } else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
+          Serial.println("Message data missing, ignoring.");
+          //we never recieved the end tag of a previous message
+          //reset vars
+          receiving = false;
+          resetTransmissionData();
+        }
+        if(message!="<f>"){// need to check if another start tag is used aswell as a message could miss the <f> tag
           if(message.startsWith("<i>")){
             message.remove(0,3);
             chunkCount++;
@@ -300,6 +345,7 @@ void loop(void) {
           }
           
         } else {
+          receiving = false;
           readyToProcess = true;
         }
       } else {
@@ -314,7 +360,7 @@ void loop(void) {
    * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
    */
   if(readyToProcess){
-    
+    Serial.println("Received: "+finalData);
     if(finalData.startsWith("<n>")){
           if(!(notificationIndex >= notificationMax)){
             getNotification(finalData);
@@ -328,10 +374,12 @@ void loop(void) {
       }
     } else if(finalData.startsWith("<w>")){
       getWeatherData(finalData);
+      weatherData = true;
     } else {
       Serial.println("Received data with unknown tag");
-      resetTransmissionData();
     }
+    //reset vars
+    resetTransmissionData();
   }
 }
 
@@ -352,12 +400,11 @@ void getWeatherData(String finalData){
     } 
   }
   weatherDay = temp[0];
-  weatherTemperature = temp[1];
+  weatherTemperature = temp[1] + " C";
   weatherForecast = temp[2];
   Serial.println("Day: "+weatherDay);
   Serial.println("Temperature: "+weatherTemperature);
   Serial.println("Forecast: "+weatherForecast);
-  resetTransmissionData();
 }
 
 int FreeRam() {
@@ -370,6 +417,12 @@ int FreeRam() {
 }
 
 void showNotifications(){
+  if(shouldRemove){
+    //remove the notification once read
+    removeNotification(menuSelector);
+    shouldRemove = false;
+    menuSelector = 0;
+  }
   for(int i=0; i < notificationIndex + 1;i++){
     int startY = 0;
     if(i==menuSelector){
@@ -438,8 +491,6 @@ void getNotification(String notificationItem){
 
   Serial.print("Free RAM:");
   Serial.println(FreeRam());
-
-  resetTransmissionData();
 }
 
 void resetTransmissionData(){
@@ -492,10 +543,6 @@ void getTimeFromDevice(String message){
         Serial.println(F("Clock is correct already!"));
         gotUpdatedTime = true;
      }
-     
-     //reset
-     finalData = "";
-     readyToProcess = false;
 }
 
 

@@ -6,12 +6,12 @@
 
 #define HWSERIAL Serial1
 u8g_t u8g;
-DS1302RTC RTC(12,11,13);
+DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
 /*
  * This has now been fully updated to the teensy, with an improved transmission algorithm. 
  * Todo: 
- * Maybe add a micro sd card(might be over kill) to store notification text on, just leave the titles in memory as we cant store many in memeory atm
+ * Maybe add a micro sd card(might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
  * 6 is just enough atm hopefully
  */
 
@@ -54,7 +54,13 @@ typedef struct{
   String text;
 } Notification;
 
-extern unsigned long _estack; 
+#ifdef __arm__
+  // should use uinstd.h to define sbrk but Due causes a conflict
+  extern "C" char* sbrk(int incr);
+#else  // __ARM__
+  extern char *__brkval;
+  extern char __bss_end;
+#endif  // __arm__
 
 Notification notifications[6];
 
@@ -120,15 +126,8 @@ void updateClock(){
 }
 
 void setup(void) {
-
-  // flip screen, if required
-  //u8g_setRot180();
   Serial.begin(9600);
   HWSERIAL.begin(9600);
-  #if defined(ARDUINO)
-    pinMode(13, OUTPUT);           
-    digitalWrite(13, HIGH);  
-  #endif
   pinMode(OK_BUTTON,INPUT);
   pinMode(DOWN_BUTTON,INPUT);
   pinMode(UP_BUTTON,INPUT);
@@ -167,7 +166,6 @@ void handleMenuInput(){
       }
       //plus y
       if((menuSelector >= 3)){
-        Serial.println("Scrolling Down 1 Item!");
         Y_OFFSET += MENU_ITEM_HEIGHT;
       }
       
@@ -311,16 +309,12 @@ void loop(void) {
    * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
    */
   if(readyToProcess){
-    // add a clause here to reset all variables if data data start is not recognized.
     if(finalData.startsWith("<n>")){
           if(!(notificationIndex >= notificationMax)){
             getNotification(finalData);
           } else {
             Serial.println("Hit max notifications, need to pop off some");
-            //reset used variables
-            readyToProcess = false;
-            chunkCount = 0;
-            finalData = "";
+            resetTransmissionData();
           }
     }else if(finalData.startsWith("<d>")){
       if(!gotUpdatedTime){
@@ -328,20 +322,18 @@ void loop(void) {
       }
     } else {
       Serial.println("Received data with unknown tag");
-      //reset used variables
-      readyToProcess = false;
-      chunkCount = 0;
-      finalData = "";
+      resetTransmissionData();
     }
   }
 }
 
-uint32_t FreeRam() { // for Teensy 3.0
-    uint32_t heapTop;
-    void* foo = malloc(1);
-    heapTop = (uint32_t) foo;
-    free(foo);
-    return (unsigned long)&_estack - heapTop;
+int FreeRam() {
+  char top;
+  #ifdef __arm__
+    return &top - reinterpret_cast<char*>(sbrk(0));
+  #else  // __arm__
+    return __brkval ? &top - __brkval : &top - &__bss_end;
+  #endif  // __arm__
 }
 
 void showNotifications(){
@@ -414,6 +406,10 @@ void getNotification(String notificationItem){
   Serial.print("Free RAM:");
   Serial.println(FreeRam());
 
+  resetTransmissionData();
+}
+
+void resetTransmissionData(){
   //reset used variables
   readyToProcess = false;
   chunkCount = 0;
@@ -460,6 +456,7 @@ void getTimeFromDevice(String message){
         Serial.println(F("Setting the clock!"));
      } else {
         //if it's correct we do not have to set the RTC and we just keep using the RTC's time
+        Serial.println(F("Clock is correct already!"));
         gotUpdatedTime = true;
      }
      

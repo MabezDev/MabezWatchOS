@@ -10,7 +10,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
  * Todo: 
- * Maybe add a micro sd card(might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
+ * Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
  * 6 is just enough atm hopefully
  * Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
  */
@@ -30,6 +30,11 @@ boolean receiving = false;
 
 int clockRadius = 32;
 int clockArray[3] = {0,0,0};
+String dateDay = "1";
+int dateMonth = 0;
+
+//can put this in progmem
+String months[12] = {"Jan ","Feb ","Mar ","April ","May ","June ","July ","Aug ","Sept ","Oct ","Nov ","Dec "};
 
 boolean weatherData = false;
 String weatherDay = "Sun";
@@ -86,6 +91,14 @@ int Y_OFFSET = 0;
 
 const int FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
 
+/*
+ * Update: 
+ *  -Made UI Look much nicer.
+ *  -Strange bug with DrawStr, getting random chars at the end of a draw sequence, temp fix is to add a space at the of the line (see months array).
+ */
+
+
+
 void u8g_prepare(void) {
   u8g_InitComFn(&u8g, &u8g_dev_sh1106_128x64_2x_i2c, u8g_com_hw_i2c_fn);
   u8g_SetFont(&u8g, u8g_font_6x12);
@@ -94,6 +107,7 @@ void u8g_prepare(void) {
 void drawClock(int hour, int minute,int second){
   //u8g_DrawFrame(&u8g,28,0,72,64);
   u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
+  u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
   //u8g_DrawLine(&u8g,64,0,64,5);//top notch
   u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
   //u8g_DrawLine(&u8g,64,64,64,59);//bottom notch
@@ -115,28 +129,42 @@ void drawClock(int hour, int minute,int second){
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
   u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
 
+  //notification indicator
   String toString = String(notificationIndex);
   char number[toString.length()];
   stringToChar(toString,number);
-  u8g_DrawStr(&u8g,120,3+FONT_HEIGHT,number);
+  u8g_DrawStr(&u8g,122,3+FONT_HEIGHT,number);
+  u8g_DrawCircle(&u8g,126,11,10,U8G_DRAW_ALL);
 
   if(weatherData){
     //change fonts
+    u8g_SetFont(&u8g, u8g_font_7x14);
     char wDay[weatherDay.length()];
     stringToChar(weatherDay,wDay);
-    //when we change fonts add that font height not the default!
-    //or add a function to change the font and get the font height progmatically
     u8g_DrawStr(&u8g,68,10+FONT_HEIGHT,wDay);
-  
+
+    u8g_SetFont(&u8g, u8g_font_helvR08);
     char wTemp[weatherTemperature.length()];
     stringToChar(weatherTemperature,wTemp);
     u8g_DrawStr(&u8g,68,20+FONT_HEIGHT,wTemp);
-  
+
+    u8g_SetFont(&u8g, u8g_font_6x12);
     char wForecast[weatherForecast.length()];
     stringToChar(weatherForecast,wForecast);
     u8g_DrawStr(&u8g,68,30+FONT_HEIGHT,wForecast);
   } else {
-    //display something else
+    //display date from RTC
+    u8g_SetFont(&u8g, u8g_font_7x14);
+    char dDay[dateDay.length()];
+    stringToChar(dateDay,dDay);
+    u8g_DrawStr(&u8g,68,10+FONT_HEIGHT,dDay);
+
+    char dMonth[months[dateMonth - 1].length()];
+    stringToChar(months[dateMonth - 1],dMonth);
+    u8g_DrawStr(&u8g,68,24+FONT_HEIGHT,dMonth);
+
+    u8g_SetFont(&u8g, u8g_font_6x12);
+    
   }
   
 }
@@ -149,6 +177,12 @@ void updateClock(){
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
     clockArray[2] = tm.Second;
+    if(tm.Day< 10){
+      dateDay = "0" + String(tm.Day);
+    } else {
+      dateDay = String(tm.Day);
+    }
+    dateMonth = tm.Month;
   }
 }
 
@@ -161,7 +195,6 @@ void setup(void) {
   RTC.haltRTC(false);
   RTC.writeEN(false);
   u8g_prepare();
-  
 }
 
 void handleMenuInput(){
@@ -229,7 +262,7 @@ void removeNotification(int pos){
   notificationIndex--;
 }
 
-//need to implment this but its too much to bother with right now
+
 void fullNotification(int chosenNotification){
   int charsThatFit = 20;
   int charIndex = 0;
@@ -326,6 +359,8 @@ void loop(void) {
     if(!HWSERIAL.available())
     {
     if(message!=""){
+      Serial.print("Message: ");
+      Serial.println(message);
         if(!receiving && message.startsWith("<")){
           receiving = true;
         } else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
@@ -355,10 +390,7 @@ void loop(void) {
       //Reset the message variable
       message="";
   }
-
-  /*
-   * Once we have the message we can take its tag i.e time or a notification etc and deal with it appropriatly from here.
-   */
+  
   if(readyToProcess){
     Serial.println("Received: "+finalData);
     if(finalData.startsWith("<n>")){
@@ -368,13 +400,16 @@ void loop(void) {
             Serial.println("Hit max notifications, need to pop off some");
             resetTransmissionData();
           }
-    }else if(finalData.startsWith("<d>")){
+    }else if(finalData.startsWith("<d>")){  
       if(!gotUpdatedTime){
-        getTimeFromDevice(finalData);   
+        getTimeFromDevice(finalData); 
       }
     } else if(finalData.startsWith("<w>")){
       getWeatherData(finalData);
       weatherData = true;
+    } else if(finalData.startsWith("<b>")){
+      //is module connected
+       HWSERIAL.print("AT");
     } else {
       Serial.println("Received data with unknown tag");
     }
@@ -399,9 +434,9 @@ void getWeatherData(String finalData){
       temp[index]+= c;
     } 
   }
-  weatherDay = temp[0];
+  weatherDay = temp[0] + "  ";
   weatherTemperature = temp[1] + " C";
-  weatherForecast = temp[2];
+  weatherForecast = temp[2] + " ";
   Serial.println("Day: "+weatherDay);
   Serial.println("Temperature: "+weatherTemperature);
   Serial.println("Forecast: "+weatherForecast);
@@ -502,12 +537,15 @@ void resetTransmissionData(){
 
 
 void getTimeFromDevice(String message){
+  Serial.print("Date data: ");
+  Serial.println(message);
   message.remove(0,3);
   String dateNtime[2] = {"",""};
   int spaceIndex = 0;
      boolean after = true;
      for(int i = 0; i< message.length();i++){
       if(after){
+        //todo: need to get date data here, first format the date coming from the smartphone so that the month in a int
        if(message.charAt(i)==' '){
           spaceIndex++;
           if(spaceIndex >= 3){

@@ -8,6 +8,10 @@ u8g_t u8g;
 DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
 /*
+ * Update: 
+ *  -Made UI Look much nicer.
+ *  -Strange bug with DrawStr, getting random chars at the end of a draw sequence, temp fix is to add a space at the of the line (see months array).
+ *
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
  * Todo: 
  * Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
@@ -34,7 +38,7 @@ String dateDay = "1";
 int dateMonth = 0;
 
 //can put this in progmem
-String months[12] = {"Jan ","Feb ","Mar ","April ","May ","June ","July ","Aug ","Sept ","Oct ","Nov ","Dec "};
+String months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
 
 boolean weatherData = false;
 String weatherDay = "Sun";
@@ -81,6 +85,7 @@ long prevMillis = 1;
 const int OK_BUTTON = 5;
 const int DOWN_BUTTON = 3;
 const int UP_BUTTON = 4;
+const int BATT_READ = A6;
 const int CLOCK_PAGE = 0;
 const int NOTIFICATION_MENU = 1;
 const int NOTIFICATION_BIG = 2;
@@ -91,13 +96,6 @@ int Y_OFFSET = 0;
 
 const int FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
 
-/*
- * Update: 
- *  -Made UI Look much nicer.
- *  -Strange bug with DrawStr, getting random chars at the end of a draw sequence, temp fix is to add a space at the of the line (see months array).
- */
-
-
 
 void u8g_prepare(void) {
   u8g_InitComFn(&u8g, &u8g_dev_sh1106_128x64_2x_i2c, u8g_com_hw_i2c_fn);
@@ -105,14 +103,14 @@ void u8g_prepare(void) {
 }
 
 void drawClock(int hour, int minute,int second){
-  //u8g_DrawFrame(&u8g,28,0,72,64);
+  //need to add am pm thing
   u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
   u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
-  //u8g_DrawLine(&u8g,64,0,64,5);//top notch
   u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
-  //u8g_DrawLine(&u8g,64,64,64,59);//bottom notch
-  //u8g_DrawLine(&u8g,28,32,33,32);//left notch
-  //u8g_DrawLine(&u8g,99,32,94,32);//right notch
+  u8g_DrawStr(&u8g,59-32 + 3,45+ FONT_HEIGHT,"6");
+  u8g_DrawStr(&u8g,7,32 + 6,"9");
+  u8g_DrawStr(&u8g,53,32 + 6,"3");
+
 
   float hours = ((hour * 30)* (PI/180));
   int x2 = 32 + (sin(hours) * (clockRadius/2));
@@ -131,42 +129,27 @@ void drawClock(int hour, int minute,int second){
 
   //notification indicator
   String toString = String(notificationIndex);
-  char number[toString.length()];
-  stringToChar(toString,number);
-  u8g_DrawStr(&u8g,122,3+FONT_HEIGHT,number);
+  u8g_DrawStr(&u8g,122,3+FONT_HEIGHT,toString.c_str());
   u8g_DrawCircle(&u8g,126,11,10,U8G_DRAW_ALL);
 
   if(weatherData){
     //change fonts
     u8g_SetFont(&u8g, u8g_font_7x14);
-    char wDay[weatherDay.length()];
-    stringToChar(weatherDay,wDay);
-    u8g_DrawStr(&u8g,68,10+FONT_HEIGHT,wDay);
-
-    u8g_SetFont(&u8g, u8g_font_helvR08);
-    char wTemp[weatherTemperature.length()];
-    stringToChar(weatherTemperature,wTemp);
-    u8g_DrawStr(&u8g,68,20+FONT_HEIGHT,wTemp);
+    u8g_DrawStr(&u8g,68,5+FONT_HEIGHT,weatherDay.c_str());
+    u8g_DrawStr(&u8g,68,20+FONT_HEIGHT,weatherTemperature.c_str());
 
     u8g_SetFont(&u8g, u8g_font_6x12);
-    char wForecast[weatherForecast.length()];
-    stringToChar(weatherForecast,wForecast);
-    u8g_DrawStr(&u8g,68,30+FONT_HEIGHT,wForecast);
+    u8g_DrawStr(&u8g,68,30+FONT_HEIGHT,weatherForecast.c_str());
   } else {
     //display date from RTC
     u8g_SetFont(&u8g, u8g_font_7x14);
-    char dDay[dateDay.length()];
-    stringToChar(dateDay,dDay);
-    u8g_DrawStr(&u8g,68,10+FONT_HEIGHT,dDay);
-
-    char dMonth[months[dateMonth - 1].length()];
-    stringToChar(months[dateMonth - 1],dMonth);
-    u8g_DrawStr(&u8g,68,24+FONT_HEIGHT,dMonth);
-
+    u8g_DrawStr(&u8g,75,10+FONT_HEIGHT,dateDay.c_str());
+    u8g_DrawStr(&u8g,75,24+FONT_HEIGHT,months[dateMonth - 1].c_str());
     u8g_SetFont(&u8g, u8g_font_6x12);
-    
   }
-  
+
+  Serial.print("Batt voltage: ");
+  Serial.println(getBattVoltage());
 }
 
 void updateClock(){
@@ -192,9 +175,28 @@ void setup(void) {
   pinMode(OK_BUTTON,INPUT);
   pinMode(DOWN_BUTTON,INPUT);
   pinMode(UP_BUTTON,INPUT);
+  pinMode(BATT_READ,INPUT);
   RTC.haltRTC(false);
   RTC.writeEN(false);
   u8g_prepare();
+
+  //setup batt read
+  analogReference(DEFAULT);
+  analogReadResolution(10);
+  analogReadAveraging(32);
+}
+
+float getBattVoltage(){
+  /*
+   * WARNING: Add voltage divider to bring batt voltage below 3.3v at all times! Do this before pluggin in the Batt or will destroy the Pin in a best case scenario
+   * and will destroy the teensy in a worst case.
+   */
+   float reads = 0;
+   for(int i=0; i<100; i++){
+    reads+= analogRead(BATT_READ);
+   }
+   //change math below to reflect the voltage divider change
+  return (reads/100) * (3.3 / 1024);
 }
 
 void handleMenuInput(){
@@ -268,31 +270,27 @@ void fullNotification(int chosenNotification){
   int charIndex = 0;
   int lines = 0;
  
-  char text[notifications[chosenNotification].text.length()];
-  stringToChar(notifications[chosenNotification].text,text);
+  String text = notifications[chosenNotification].text;
 
   String linesArray[(notifications[chosenNotification].text.length()/charsThatFit)+2];
  
   if(notifications[chosenNotification].text.length() > charsThatFit){
     for(int i=0; i< notifications[chosenNotification].text.length(); i++){
       if(charIndex > charsThatFit){
-        linesArray[lines] += text[i];
+        linesArray[lines] += text.charAt(i);
         lines++;
         charIndex = 0;
       } else {
-        linesArray[lines] += text[i];
+        linesArray[lines] += text.charAt(i);
         charIndex++;
       }
     }
     for(int j=0; j < lines + 1; j++){
-      char lineToDraw[32] = {' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',
-      ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '};//32 to fill a whole row
-      stringToChar(linesArray[j],lineToDraw);
-      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET,lineToDraw);
+      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET,linesArray[j].c_str());
     }
     lineCount = lines;
   } else {
-    u8g_DrawStr(&u8g,0,FONT_HEIGHT,text);
+    u8g_DrawStr(&u8g,0,FONT_HEIGHT,text.c_str());
   }
 }
 
@@ -434,9 +432,9 @@ void getWeatherData(String finalData){
       temp[index]+= c;
     } 
   }
-  weatherDay = temp[0] + "  ";
+  weatherDay = temp[0];
   weatherTemperature = temp[1] + " C";
-  weatherForecast = temp[2] + " ";
+  weatherForecast = temp[2];
   Serial.println("Day: "+weatherDay);
   Serial.println("Temperature: "+weatherTemperature);
   Serial.println("Forecast: "+weatherForecast);
@@ -464,9 +462,7 @@ void showNotifications(){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
     if(i!=notificationIndex){
-      char title[notifications[i].title.length()];
-      stringToChar(notifications[i].title,title);
-      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,title);//string to char only printing the first character, need to fix
+      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[i].title.c_str());
     } else {
       u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
@@ -475,14 +471,6 @@ void showNotifications(){
   }
   y = 0;
 }
-
-void stringToChar(String s, char* buf){
-  for(int i = 0; i < s.length();i++){
-    buf[i] = (char) s.charAt(i);
-  }
-}
-
-
 
 void clockInput(){
   button_ok = digitalRead(OK_BUTTON);

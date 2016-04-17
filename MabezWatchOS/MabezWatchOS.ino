@@ -2,74 +2,9 @@
 #include <i2c_t3.h>
 #include <Time.h>
 #include <DS1302RTC.h>
-
 #define HWSERIAL Serial1
-u8g_t u8g;
-DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
-/*
- * Update: 
- *  -Made UI Look much nicer.
- *  -Strange bug with DrawStr, getting random chars at the end of a draw sequence, temp fix is to add a space at the of the line (see months array).
- *
- * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
- * Todo: 
- * Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
- * 6 is just enough atm hopefully
- * Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
- */
-
-boolean button_ok = false;
-boolean lastb_ok = false;
-boolean button_up = false;
-boolean lastb_up = false;
-boolean button_down = false;
-boolean lastb_down = false;
-
-String message = "";
-String finalData = "";
-int chunkCount = 0;
-boolean readyToProcess = false;
-boolean receiving = false;
-
-int clockRadius = 32;
-int clockArray[3] = {0,0,0};
-String dateDay = "1";
-int dateMonth = 0;
-
-//can put this in progmem
-String months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-
-boolean weatherData = false;
-String weatherDay = "Sun";
-String weatherTemperature = "24 C";
-String weatherForecast = "Showers";
-
-tmElements_t tm;
-time_t t;
-
-boolean gotUpdatedTime = false;
-boolean hasNotifications = false;
-
-int notificationIndex = 0;
-int notificationMax = 6;
-
-int pageIndex = 0;
-int menuSelector = 0;
-boolean shouldRemove = false;
-
-int lineCount = 0;
-int currentLine = 0;
-
-const int x = 6;
-int y = 0; 
-
-typedef struct{
-  String packageName;
-  String title;
-  String text;
-} Notification;
-
+//needed for calculating Free RAM on ARM based MC's
 #ifdef __arm__
   extern "C" char* sbrk(int incr);
 #else  // __ARM__
@@ -77,25 +12,127 @@ typedef struct{
   extern char __bss_end;
 #endif  // __arm__
 
-Notification notifications[6];
+//u8g lib object without the wrapper due to lack of support of the OLED
+u8g_t u8g;
+//RTC object
+DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
-int clockUpdateInterval = 1000;
+/*
+ * Update: 
+ *  -Made UI Look much nicer.
+ *  
+ *  Buglist:
+ *  -Removing Notifications when they are full crashes
+ *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
+ *  -need a way to free up the chars once we have removed them in a notification
+ *
+ * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
+ * Todo: 
+ * -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
+ * -Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
+ *  6 is just enough atm hopefully
+ * -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
+ */
+
+//input vars
+boolean button_ok = false;
+boolean lastb_ok = false;
+boolean button_up = false;
+boolean lastb_up = false;
+boolean button_down = false;
+boolean lastb_down = false;
+
+//serial retrieval vars
+String message = "";
+String finalData = "";
+int chunkCount = 0;
+boolean readyToProcess = false;
+boolean receiving = false;
+
+//date contants
+String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+
+//weather vars
+boolean weatherData = false;
+String weatherDay = "Sun";
+String weatherTemperature = "24 C";
+String weatherForecast = "Showers";
+
+
+//time and date constants
+tmElements_t tm;
+time_t t;
+int PROGMEM clockRadius = 32;
+const int PROGMEM clockUpdateInterval = 1000;
+
+//time and date vars
+boolean gotUpdatedTime = false;
+int clockArray[3] = {0,0,0};
+String dateDay = "1";
+int dateMonth = 0;
 long prevMillis = 1;
 
-const int OK_BUTTON = 5;
-const int DOWN_BUTTON = 3;
-const int UP_BUTTON = 4;
-const int BATT_READ = A6;
-const int CLOCK_PAGE = 0;
-const int NOTIFICATION_MENU = 1;
-const int NOTIFICATION_BIG = 2;
-const int MAX_PAGES = 2;
-const int MENU_ITEM_HEIGHT = 16;
+//notification data structure
+typedef struct{
+  String packageName;
+  String title;
+  String text;
+} Notification;
 
+//notification vars
+int notificationIndex = 0;
+int PROGMEM notificationMax = 6;
+Notification notifications[6];
+
+boolean shouldRemove = false;
+
+//pin constants
+const int PROGMEM OK_BUTTON = 5;
+const int PROGMEM DOWN_BUTTON = 3;
+const int PROGMEM UP_BUTTON = 4;
+const int PROGMEM BATT_READ = A6;
+const int PROGMEM VIBRATE_PIN = 10;
+
+//navigation constants
+const int PROGMEM CLOCK_PAGE = 0;
+const int PROGMEM NOTIFICATION_MENU = 1;
+const int PROGMEM NOTIFICATION_BIG = 2;
+const int PROGMEM MAX_PAGES = 2;
+const int PROGMEM MENU_ITEM_HEIGHT = 16;
+const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
+
+//navigation vars
+int pageIndex = 0;
+int menuSelector = 0;
+
+const int x = 6;
+int y = 0; 
 int Y_OFFSET = 0;
 
-const int FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
+int lineCount = 0;
+int currentLine = 0;
 
+//batt monitoring
+float batteryVoltage = 0;
+
+
+void setup(void) {
+  Serial.begin(9600);
+  HWSERIAL.begin(9600);
+  pinMode(OK_BUTTON,INPUT);
+  pinMode(DOWN_BUTTON,INPUT);
+  pinMode(UP_BUTTON,INPUT);
+  pinMode(BATT_READ,INPUT);
+  pinMode(VIBRATE_PIN,OUTPUT);
+  RTC.haltRTC(false);
+  RTC.writeEN(false);
+  u8g_prepare();
+
+  //setup batt read pin
+  analogReference(DEFAULT);
+  analogReadResolution(10);// 2^10 = 1024
+  analogReadAveraging(32);//smoothing
+}
 
 void u8g_prepare(void) {
   u8g_InitComFn(&u8g, &u8g_dev_sh1106_128x64_2x_i2c, u8g_com_hw_i2c_fn);
@@ -108,8 +145,8 @@ void drawClock(int hour, int minute,int second){
   u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
   u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
   u8g_DrawStr(&u8g,59-32 + 3,45+ FONT_HEIGHT,"6");
-  u8g_DrawStr(&u8g,7,32 + 6,"9");
-  u8g_DrawStr(&u8g,53,32 + 6,"3");
+  u8g_DrawStr(&u8g,7,32 + 3,"9");
+  u8g_DrawStr(&u8g,53,32   + 3,"3");
 
 
   float hours = ((hour * 30)* (PI/180));
@@ -132,6 +169,8 @@ void drawClock(int hour, int minute,int second){
   u8g_DrawStr(&u8g,122,3+FONT_HEIGHT,toString.c_str());
   u8g_DrawCircle(&u8g,126,11,10,U8G_DRAW_ALL);
 
+  
+
   if(weatherData){
     //change fonts
     u8g_SetFont(&u8g, u8g_font_7x14);
@@ -148,11 +187,10 @@ void drawClock(int hour, int minute,int second){
     u8g_SetFont(&u8g, u8g_font_6x12);
   }
 
-  Serial.print("Batt voltage: ");
-  Serial.println(getBattVoltage());
+  
 }
 
-void updateClock(){
+void updateClockAndBattery(){
   long current = millis();
   if(current - prevMillis >= clockUpdateInterval){
     prevMillis = current;
@@ -166,27 +204,13 @@ void updateClock(){
       dateDay = String(tm.Day);
     }
     dateMonth = tm.Month;
+
+    // update battery stuff
+    batteryVoltage = getBatteryVoltage();
   }
 }
 
-void setup(void) {
-  Serial.begin(9600);
-  HWSERIAL.begin(9600);
-  pinMode(OK_BUTTON,INPUT);
-  pinMode(DOWN_BUTTON,INPUT);
-  pinMode(UP_BUTTON,INPUT);
-  pinMode(BATT_READ,INPUT);
-  RTC.haltRTC(false);
-  RTC.writeEN(false);
-  u8g_prepare();
-
-  //setup batt read
-  analogReference(DEFAULT);
-  analogReadResolution(10);
-  analogReadAveraging(32);
-}
-
-float getBattVoltage(){
+float getBatteryVoltage(){
   /*
    * WARNING: Add voltage divider to bring batt voltage below 3.3v at all times! Do this before pluggin in the Batt or will destroy the Pin in a best case scenario
    * and will destroy the teensy in a worst case.
@@ -197,6 +221,20 @@ float getBattVoltage(){
    }
    //change math below to reflect the voltage divider change
   return (reads/100) * (3.3 / 1024);
+}
+
+void alert(){
+  //buzzes with vibration motor
+  //activates transistor that connects the buzzer with 3.3v
+  // due to the nature of transistors there is 0.7v drop
+  //bringing the voltage to 2.6v - which is safe for the motors
+    digitalWrite(VIBRATE_PIN,HIGH);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,LOW);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,HIGH);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,LOW);
 }
 
 void handleMenuInput(){
@@ -240,7 +278,7 @@ void handleMenuInput(){
       if(menuSelector != notificationIndex){//last one is the back item
         pageIndex = NOTIFICATION_BIG;
       } else {
-        menuSelector = 0;//rest the selector
+        menuSelector = 0;//reset the selector
         Y_OFFSET = 0;//reset any scrolling done
         pageIndex = CLOCK_PAGE;// go back to list of notifications
         
@@ -252,16 +290,21 @@ void handleMenuInput(){
 }
 
 void removeNotification(int pos){
+  Serial.print("Free RAM Before: ");
+  Serial.println(FreeRam());
   if ( pos >= notificationIndex + 1 ){
     Serial.println("Can't delete notification.");
   } else {
-    for ( int c = pos ; c < notificationIndex ; c++ ){
+    for ( int c = pos ; c < (notificationIndex - 1) ; c++ ){
        notifications[c] = notifications[c+1];
     }
+    Serial.print("Removed notification at position: ");
+    Serial.println(pos);
+    //lower the index
+    notificationIndex--;
   }
-  //lower the index
-  Serial.println("Removed notification at position: "+pos);
-  notificationIndex--;
+  Serial.print("Free RAM After: ");
+  Serial.println(FreeRam());
 }
 
 
@@ -272,7 +315,7 @@ void fullNotification(int chosenNotification){
  
   String text = notifications[chosenNotification].text;
 
-  String linesArray[(notifications[chosenNotification].text.length()/charsThatFit)+2];
+  String linesArray[(notifications[chosenNotification].text.length()/charsThatFit)+1];
  
   if(notifications[chosenNotification].text.length() > charsThatFit){
     for(int i=0; i< notifications[chosenNotification].text.length(); i++){
@@ -383,7 +426,7 @@ void loop(void) {
         }
       } else {
         //we have no connection to phone use the time from the RTC
-         updateClock();
+         updateClockAndBattery();
       }
       //Reset the message variable
       message="";
@@ -398,6 +441,7 @@ void loop(void) {
             Serial.println("Hit max notifications, need to pop off some");
             resetTransmissionData();
           }
+          alert();
     }else if(finalData.startsWith("<d>")){  
       if(!gotUpdatedTime){
         getTimeFromDevice(finalData); 
@@ -585,15 +629,5 @@ void setClockTime(int hours,int minutes,int seconds){// no need for seconds
     Serial.println(F("Writing to clock failed!"));
   }
 }
-
-
-
-
-
-
-
-
-
-
 
 

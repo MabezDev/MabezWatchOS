@@ -18,20 +18,22 @@ u8g_t u8g;
 DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
 /*
+ * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
+ * 
  * Update: 
  *  -Made UI Look much nicer.
+ *  -Fixed notification sizes mean we can't SRAM overflow
  *  
  *  Buglist:
- *  -Removing Notifications when they are full crashes
  *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
- *  -need a way to free up the chars once we have removed them in a notification
+ *  -Need to remove all mentions of string and change to char array so save even more RAM
  *
- * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
- * Todo: 
- * -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
- * -Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
+ *  Todo: 
+ *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
+ *    -Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
  *  6 is just enough atm hopefully
- * -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
+ *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
+ * 
  */
 
 //input vars
@@ -74,15 +76,15 @@ long prevMillis = 1;
 
 //notification data structure
 typedef struct{
-  String packageName;
-  String title;
-  String text;
+  char packageName[15];
+  char title[15];
+  char text[150];
 } Notification;
 
 //notification vars
 int notificationIndex = 0;
-int PROGMEM notificationMax = 6;
-Notification notifications[6];
+int PROGMEM notificationMax = 10;
+Notification notifications[8];
 
 boolean shouldRemove = false;
 
@@ -290,8 +292,6 @@ void handleMenuInput(){
 }
 
 void removeNotification(int pos){
-  Serial.print("Free RAM Before: ");
-  Serial.println(FreeRam());
   if ( pos >= notificationIndex + 1 ){
     Serial.println("Can't delete notification.");
   } else {
@@ -303,8 +303,6 @@ void removeNotification(int pos){
     //lower the index
     notificationIndex--;
   }
-  Serial.print("Free RAM After: ");
-  Serial.println(FreeRam());
 }
 
 
@@ -315,10 +313,10 @@ void fullNotification(int chosenNotification){
  
   String text = notifications[chosenNotification].text;
 
-  String linesArray[(notifications[chosenNotification].text.length()/charsThatFit)+1];
+  String linesArray[8]; // (150/charsThatFit) = 7.5 = 8
  
-  if(notifications[chosenNotification].text.length() > charsThatFit){
-    for(int i=0; i< notifications[chosenNotification].text.length(); i++){
+  if(sizeof(notifications[chosenNotification].text) > charsThatFit){
+    for(int i=0; i< 150; i++){
       if(charIndex > charsThatFit){
         linesArray[lines] += text.charAt(i);
         lines++;
@@ -329,7 +327,7 @@ void fullNotification(int chosenNotification){
       }
     }
     for(int j=0; j < lines + 1; j++){
-      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET,linesArray[j].c_str());
+      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET, linesArray[j].c_str());
     }
     lineCount = lines;
   } else {
@@ -506,7 +504,7 @@ void showNotifications(){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
     if(i!=notificationIndex){
-      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[i].title.c_str());
+      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[i].title);
     } else {
       u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
@@ -548,12 +546,20 @@ void getNotification(String notificationItem){
       temp[index]+= c;
     } 
   }
-  //add the text tot he current notification
-  notifications[notificationIndex].packageName = temp[0];
-  notifications[notificationIndex].title = temp[1];
-  notifications[notificationIndex].text = temp[2];
-  Serial.println("Notification title: "+notifications[notificationIndex].title);
-  Serial.println("Notification text: "+notifications[notificationIndex].text);
+  temp[0].substring(0,15);//make sure it fits
+  temp[1].substring(0,15);//make sure it fits
+  for(int j=0; j < 15;j++){
+    notifications[notificationIndex].packageName[j] = temp[0].charAt(j);
+    notifications[notificationIndex].title[j] = temp[1].charAt(j);
+  }
+  temp[2].substring(0,150);//make sure it fits
+  for(int k=0; k < 150;k++){
+     notifications[notificationIndex].text[k] = temp[2].charAt(k);
+  }
+  Serial.print("Notification title: ");
+  Serial.println(notifications[notificationIndex].title);
+  Serial.print("Notification text: ");
+  Serial.println(notifications[notificationIndex].text);
   notificationIndex++;
 
   Serial.print("Free RAM:");

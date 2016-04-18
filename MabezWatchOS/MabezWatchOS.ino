@@ -22,18 +22,19 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  * 
  * Update: 
  *  -Made UI Look much nicer.
- *  -Fixed notification sizes mean we can't SRAM overflow
+ *  -Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData
  *  
  *  Buglist:
  *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
  *  -Need to remove all mentions of string and change to char array so save even more RAM
+ *  - if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations
  *
  *  Todo: 
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
  *    -Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
  *  6 is just enough atm hopefully
  *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
- * 
+ *    -add month and year 
  */
 
 //input vars
@@ -117,6 +118,15 @@ int currentLine = 0;
 //batt monitoring
 float batteryVoltage = 0;
 
+//connection
+boolean isConnected = false;
+
+
+//icons
+
+const byte PROGMEM BLUETOOTH_CONNECTED[] = { 
+   0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
+};
 
 void setup(void) {
   Serial.begin(9600);
@@ -134,6 +144,11 @@ void setup(void) {
   analogReference(DEFAULT);
   analogReadResolution(10);// 2^10 = 1024
   analogReadAveraging(32);//smoothing
+
+  /*
+   * Could at HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
+   */
+   HWSERIAL.print("AT");
 }
 
 void u8g_prepare(void) {
@@ -189,10 +204,16 @@ void drawClock(int hour, int minute,int second){
     u8g_SetFont(&u8g, u8g_font_6x12);
   }
 
+  if(isConnected){
+    u8g_DrawXBMP(&u8g,100,3,8,10,BLUETOOTH_CONNECTED);
+  } else {
+    u8g_DrawStr(&u8g,100,15,"NC");
+  }
+
   
 }
 
-void updateClockAndBattery(){
+void updateSystem(){
   long current = millis();
   if(current - prevMillis >= clockUpdateInterval){
     prevMillis = current;
@@ -395,11 +416,19 @@ void loop(void) {
       message+=char(incoming);//store string from serial command
       delay(1);
     }
-    if(!HWSERIAL.available())
-    {
-    if(message!=""){
-      Serial.print("Message: ");
-      Serial.println(message);
+    if(!HWSERIAL.available()){
+      if(message!=""){
+        Serial.print("Message: ");
+        Serial.println(message);
+        if(message=="OK+CONN"){
+          isConnected = true;
+          Serial.println(F("BLUETOOTH IS CONNECTED."));
+          message="";
+        } else if(message=="OK+LOST") {
+          isConnected = false;
+          Serial.println(F("BLUETOOTH IS NOT CONNECTED."));
+          message="";
+        }
         if(!receiving && message.startsWith("<")){
           receiving = true;
         } else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
@@ -422,12 +451,12 @@ void loop(void) {
           receiving = false;
           readyToProcess = true;
         }
-      } else {
-        //we have no connection to phone use the time from the RTC
-         updateClockAndBattery();
-      }
-      //Reset the message variable
-      message="";
+    } else {
+       //we are not recieving from the bluetooth module
+       updateSystem();
+    }
+    //Reset the message variable
+    message="";
   }
   
   if(readyToProcess){
@@ -447,14 +476,13 @@ void loop(void) {
     } else if(finalData.startsWith("<w>")){
       getWeatherData(finalData);
       weatherData = true;
-    } else if(finalData.startsWith("<b>")){
-      //is module connected
-       HWSERIAL.print("AT");
     } else {
       Serial.println("Received data with unknown tag");
     }
     //reset vars
     resetTransmissionData();
+    Serial.print("Free RAM:");
+    Serial.println(FreeRam());
   }
 }
 
@@ -561,9 +589,6 @@ void getNotification(String notificationItem){
   Serial.print("Notification text: ");
   Serial.println(notifications[notificationIndex].text);
   notificationIndex++;
-
-  Serial.print("Free RAM:");
-  Serial.println(FreeRam());
 }
 
 void resetTransmissionData(){

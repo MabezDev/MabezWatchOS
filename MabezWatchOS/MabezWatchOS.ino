@@ -20,6 +20,9 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
  * 
+ * Important:
+ *  -The DS1302 lib im using does not support the Week day feature, need to use a new library.
+ * 
  * Update: 
  *  -Made UI Look much nicer.
  *  -Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData
@@ -31,10 +34,10 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *
  *  Todo: 
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
- *    -Maybe add a micro sd card (might be over kill) or eeprom to store notification text on, just leave the titles in memory as we cant store many in memeory atm
- *  6 is just enough atm hopefully
  *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
- *    -add month and year 
+ *    -add month and year
+ *    -add reply phrases, if they are short answers like yeah nah, busy right now etc.
+ *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
  */
 
 //input vars
@@ -54,7 +57,7 @@ boolean receiving = false;
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-
+String PROGMEM days[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 //weather vars
 boolean weatherData = false;
 String weatherDay = "Sun";
@@ -71,8 +74,8 @@ const int PROGMEM clockUpdateInterval = 1000;
 //time and date vars
 boolean gotUpdatedTime = false;
 int clockArray[3] = {0,0,0};
-String dateDay = "1";
-int dateMonth = 0;
+int dateArray[4] = {0,0,0,0};
+
 long prevMillis = 1;
 
 //notification data structure
@@ -84,7 +87,7 @@ typedef struct{
 
 //notification vars
 int notificationIndex = 0;
-int PROGMEM notificationMax = 10;
+int PROGMEM notificationMax = 8;
 Notification notifications[8];
 
 boolean shouldRemove = false;
@@ -199,8 +202,9 @@ void drawClock(int hour, int minute,int second){
   } else {
     //display date from RTC
     u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,75,10+FONT_HEIGHT,dateDay.c_str());
-    u8g_DrawStr(&u8g,75,24+FONT_HEIGHT,months[dateMonth - 1].c_str());
+    u8g_DrawStr(&u8g,68,5+FONT_HEIGHT,days[dateArray[0] - 1].c_str());
+    u8g_DrawStr(&u8g,75,10+FONT_HEIGHT,String(dateArray[1]).c_str());
+    u8g_DrawStr(&u8g,75,24+FONT_HEIGHT,months[dateArray[2] - 1].c_str());
     u8g_SetFont(&u8g, u8g_font_6x12);
   }
 
@@ -221,13 +225,17 @@ void updateSystem(){
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
     clockArray[2] = tm.Second;
-    if(tm.Day< 10){
+    /*if(tm.Day< 10){
       dateDay = "0" + String(tm.Day);
     } else {
       dateDay = String(tm.Day);
     }
-    dateMonth = tm.Month;
-
+    dateMonth = tm.Month;*/
+    dateArray[0]  = tm.Wday;
+    dateArray[1] = tm.Day;
+    dateArray[2] = tm.Month;
+    dateArray[3] = tm.Year;
+    Serial.println(tm.Wday);
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
   }
@@ -420,14 +428,15 @@ void loop(void) {
       if(message!=""){
         Serial.print("Message: ");
         Serial.println(message);
-        if(message=="OK+CONN"){
-          isConnected = true;
-          Serial.println(F("BLUETOOTH IS CONNECTED."));
-          message="";
-        } else if(message=="OK+LOST") {
-          isConnected = false;
-          Serial.println(F("BLUETOOTH IS NOT CONNECTED."));
-          message="";
+        if(message.startsWith("OK")){
+          if(message.startsWith("OK+C")){
+            isConnected = true;
+          }
+          if(message.startsWith("OK+L")){
+            isConnected = false;
+            //reset vars like got updated time and weather here also
+          }
+          message = "";
         }
         if(!receiving && message.startsWith("<")){
           receiving = true;
@@ -451,10 +460,9 @@ void loop(void) {
           receiving = false;
           readyToProcess = true;
         }
-    } else {
-       //we are not recieving from the bluetooth module
-       updateSystem();
     }
+    //update system stuff
+    updateSystem();
     //Reset the message variable
     message="";
   }
@@ -475,7 +483,7 @@ void loop(void) {
       }
     } else if(finalData.startsWith("<w>")){
       getWeatherData(finalData);
-      weatherData = true;
+      //weatherData = true; // UNCOMMENT THIS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     } else {
       Serial.println("Received data with unknown tag");
     }
@@ -600,18 +608,23 @@ void resetTransmissionData(){
 
 
 void getTimeFromDevice(String message){
+  //sample data
+  //<d>24 04 2016 17:44:46
   Serial.print("Date data: ");
   Serial.println(message);
   message.remove(0,3);
   String dateNtime[2] = {"",""};
-  int spaceIndex = 0;
+  int dateIndex = 0;
      boolean after = true;
      for(int i = 0; i< message.length();i++){
       if(after){
         //todo: need to get date data here, first format the date coming from the smartphone so that the month in a int
        if(message.charAt(i)==' '){
-          spaceIndex++;
-          if(spaceIndex >= 3){
+          dateArray[dateIndex] = dateNtime[0].toInt();
+          Serial.println(dateArray[dateIndex]);
+          dateNtime[0] = "";
+          dateIndex++;
+          if(dateIndex > 3){
             after = false;
           } 
        } else {
@@ -633,11 +646,13 @@ void getTimeFromDevice(String message){
           clockArray[clockIndex] = temp.toInt();
         }
      }
+
+     
      //Read from the RTC
      RTC.read(tm);
      //Compare to time from Device(only minutes and hours doesn't have to be perfect)
-     if(!(tm.Hour == clockArray[0] && tm.Minute== clockArray[1])){
-        setClockTime(clockArray[0],clockArray[1],clockArray[2]);
+     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[1] == tm.Day && dateArray[2] == tm.Month && dateArray[3] == tm.Year && tm.Wday == dateArray[0]))){
+        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2],dateArray[3]);
         Serial.println(F("Setting the clock!"));
      } else {
         //if it's correct we do not have to set the RTC and we just keep using the RTC's time
@@ -647,10 +662,22 @@ void getTimeFromDevice(String message){
 }
 
 
-void setClockTime(int hours,int minutes,int seconds){// no need for seconds
+void setClockTime(int hours,int minutes,int seconds,int DoW, int days, int months, int years){// DoW = DayOfWeek
   tm.Hour = hours;
   tm.Minute = minutes;
   tm.Second = seconds;
+  tm.Day = days;
+  tm.Month = months;
+  tm.Year = years;
+  Serial.print("Setting clock to day : ");
+  Serial.println(DoW);
+  Serial.print("Setting day : ");
+  Serial.println(days);
+  Serial.print("Setting months : ");
+  Serial.println(months);
+  Serial.print("Setting years : ");
+  Serial.println(years);
+  tm.Wday = DoW;
   t = makeTime(tm);
   if(RTC.set(t) == 0) { // Success
     setTime(t);

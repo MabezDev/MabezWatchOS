@@ -12,8 +12,9 @@
   extern char __bss_end;
 #endif  // __arm__
 
-//u8g lib object without the wrapper due to lack of support of the OLED
+//u8g lib object without the c++ wrapper due to lack of support of the OLED
 u8g_t u8g;
+
 //RTC object
 DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 
@@ -38,6 +39,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    -add month and year
  *    -add reply phrases, if they are short answers like yeah nah, busy right now etc.
  *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
+ *    need to completely remove string from this sketch, and use char[] instead
  */
 
 //input vars
@@ -57,12 +59,12 @@ boolean receiving = false;
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-String PROGMEM days[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 //weather vars
-boolean weatherData = false;
+boolean weatherData = false; 
 String weatherDay = "Sun";
-String weatherTemperature = "24 C";
-String weatherForecast = "Showers";
+String weatherTemperature = "Unknown";
+String weatherForecast = "Forecast devoid.";
 
 
 //time and date constants
@@ -120,13 +122,13 @@ int currentLine = 0;
 
 //batt monitoring
 float batteryVoltage = 0;
+int batteryPercentage = 0;
 
 //connection
 boolean isConnected = false;
 
 
 //icons
-
 const byte PROGMEM BLUETOOTH_CONNECTED[] = { 
    0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
 };
@@ -183,38 +185,68 @@ void drawClock(int hour, int minute,int second){
   int xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
   u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
-
-  //notification indicator
-  String toString = String(notificationIndex);
-  u8g_DrawStr(&u8g,122,3+FONT_HEIGHT,toString.c_str());
-  u8g_DrawCircle(&u8g,126,11,10,U8G_DRAW_ALL);
-
   
-
   if(weatherData){
-    //change fonts
-    u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,68,5+FONT_HEIGHT,weatherDay.c_str());
-    u8g_DrawStr(&u8g,68,20+FONT_HEIGHT,weatherTemperature.c_str());
-
-    u8g_SetFont(&u8g, u8g_font_6x12);
-    u8g_DrawStr(&u8g,68,30+FONT_HEIGHT,weatherForecast.c_str());
+    weatherWidget();
   } else {
-    //display date from RTC
-    u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,68,5+FONT_HEIGHT,days[dateArray[0] - 1].c_str());
-    u8g_DrawStr(&u8g,75,10+FONT_HEIGHT,String(dateArray[1]).c_str());
-    u8g_DrawStr(&u8g,75,24+FONT_HEIGHT,months[dateArray[2] - 1].c_str());
-    u8g_SetFont(&u8g, u8g_font_6x12);
+    timeDateWidget();
   }
 
-  if(isConnected){
-    u8g_DrawXBMP(&u8g,100,3,8,10,BLUETOOTH_CONNECTED);
-  } else {
-    u8g_DrawStr(&u8g,100,15,"NC");
-  }
-
+  //status bar - 15 px high for future icon ref
+  u8g_DrawFrame(&u8g,75,0,53,15);
+  //separator line between notifications and bt icon on the status bar
+  u8g_DrawLine(&u8g,116,0,116,14);
+  //batt voltage and connection separator
+  u8g_DrawLine(&u8g,97,0,97,14);
   
+  //notification indicator
+  u8g_DrawStr(&u8g,119,-1 + FONT_HEIGHT,String(notificationIndex).c_str());
+
+  //battery voltage
+  String batt = String(batteryPercentage) + "%";
+  u8g_DrawStr(&u8g,77,11,batt.c_str());
+  //connection icon
+  if(isConnected){
+    u8g_DrawXBMP(&u8g,102,2,8,10,BLUETOOTH_CONNECTED);
+  } else {
+    u8g_DrawStr(&u8g,102,11,"NC");
+  }
+}
+
+void timeDateWidget(){
+  //display date from RTC
+  u8g_SetFont(&u8g, u8g_font_7x14);
+  u8g_DrawStr(&u8g,72,20+14,days[dateArray[0] - 1].c_str());
+  u8g_DrawStr(&u8g,72,34+14,String(dateArray[1]).c_str());
+  u8g_DrawStr(&u8g,90,34+14,months[dateArray[2] - 1].c_str());
+  u8g_SetFont(&u8g, u8g_font_6x12);
+}
+void weatherWidget(){
+  //change fonts
+  u8g_SetFont(&u8g, u8g_font_7x14);
+  u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay.c_str());
+  u8g_DrawStr(&u8g,72,32+FONT_HEIGHT,weatherTemperature.c_str());
+  
+  boolean canFit = true;
+  int lineIndex = 0;
+  String twoLines[2];
+  for(int i=0; i < weatherForecast.length(); i++){
+    if(weatherForecast.charAt(i) == ' '){
+      canFit = false;
+      lineIndex++;
+    } else {
+      twoLines[lineIndex] += weatherForecast.charAt(i);
+    }
+  }
+
+  u8g_SetFont(&u8g, u8g_font_6x12);
+  
+  if(canFit){
+    u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,weatherForecast.c_str());
+  } else {
+    u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,twoLines[0].c_str());
+    u8g_DrawStr(&u8g,72,52+FONT_HEIGHT,twoLines[1].c_str());
+  }
 }
 
 void updateSystem(){
@@ -238,6 +270,7 @@ void updateSystem(){
     Serial.println(tm.Wday);
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
+    batteryPercentage = ((batteryVoltage - 3)/1.2)*100;
   }
 }
 
@@ -483,7 +516,7 @@ void loop(void) {
       }
     } else if(finalData.startsWith("<w>")){
       getWeatherData(finalData);
-      //weatherData = true; // UNCOMMENT THIS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+      weatherData = true;
     } else {
       Serial.println("Received data with unknown tag");
     }

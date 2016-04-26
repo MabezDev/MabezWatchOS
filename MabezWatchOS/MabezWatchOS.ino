@@ -22,14 +22,15 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
  * 
  * Update: 
- *  -Made UI Look much nicer.
- *  -Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData
- *  -fixed RTC not setting/receiving the year
+ *  -(04/04/16)UI Improved vastly.
+ *  -(19/04/16)Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData
+ *  -(25/04/16)Fixed RTC not setting/receiving the year
+ *  -(26/04/16)Added a menu/widget service for the main page
  *  
  *  Buglist:
  *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
  *  -Need to remove all mentions of string and change to char array so save even more RAM
- *  - if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations (Solution remove string (Use char[]), only allow max payload size of something)
+ *  -if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations (Solution remove string (Use char[]), only allow max payload size of something)
  *
  *  Todo: 
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
@@ -40,6 +41,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    -need to completely remove string from this sketch, and use char[] instead
  *    -text wrapping on the full notification page
  *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use
+ *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one
  */
 
 //input vars
@@ -102,10 +104,10 @@ const int PROGMEM BATT_READ = A6;
 const int PROGMEM VIBRATE_PIN = 10;
 
 //navigation constants
-const int PROGMEM CLOCK_PAGE = 0;
+const int PROGMEM HOME_PAGE = 0;
 const int PROGMEM NOTIFICATION_MENU = 1;
 const int PROGMEM NOTIFICATION_BIG = 2;
-const int PROGMEM MAX_PAGES = 2;
+const int PROGMEM TIMER = 1;
 const int PROGMEM MENU_ITEM_HEIGHT = 16;
 const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
 
@@ -113,7 +115,7 @@ const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr 
 int pageIndex = 0;
 int menuSelector = 0;
 int widgetSelector = 0;
-int numberOfWidgets = 2; // actually 3, 0,1,2.
+int numberOfWidgets = 4; // actually 3, 0,1,2.
 
 const int x = 6;
 int y = 0; 
@@ -171,9 +173,15 @@ void drawClock(int hour, int minute,int second){
   u8g_DrawStr(&u8g,59-32 + 3,45+ FONT_HEIGHT,"6");
   u8g_DrawStr(&u8g,7,32 + 3,"9");
   u8g_DrawStr(&u8g,53,32   + 3,"3");
-
-
-  float hours = ((hour * 30)* (PI/180));
+  
+  if(clockArray[0] > 12){
+    u8g_DrawStr(&u8g,0,64,"PM");
+  } else {
+    u8g_DrawStr(&u8g,0,64,"AM");
+  }
+  
+  
+  float hours = (((hour * 30) + ((minute/2))) * (PI/180));
   int x2 = 32 + (sin(hours) * (clockRadius/2));
   int y2 = 32 - (cos(hours) * (clockRadius/2));
   u8g_DrawLine(&u8g,32,32,x2,y2); //hour hand
@@ -192,6 +200,12 @@ void drawClock(int hour, int minute,int second){
     case 0: timeDateWidget(); break;
     case 1: digitalClockWidget(); break;
     case 2: weatherWidget(); break;
+    case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,85,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    //possible widgets:
+    //go to messages
+    //timer
+    //
   }
 
   //status bar - 15 px high for future icon ref
@@ -281,7 +295,6 @@ void updateSystem(){
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
     clockArray[2] = tm.Second;
-  
     dateArray[0] = tm.Day;
     dateArray[1] = tm.Month;
     dateArray[2] = tmYearToCalendar(tm.Year);
@@ -317,10 +330,6 @@ void alert(){
     digitalWrite(VIBRATE_PIN,HIGH);
     delay(500);
     digitalWrite(VIBRATE_PIN,LOW);
-    delay(500);
-    digitalWrite(VIBRATE_PIN,HIGH);
-    delay(500);
-    digitalWrite(VIBRATE_PIN,LOW);
 }
 
 void handleInput(){
@@ -330,7 +339,7 @@ void handleInput(){
 
   if (button_up != lastb_up) {
     if (button_up == HIGH) {
-      if(pageIndex == CLOCK_PAGE){
+      if(pageIndex == HOME_PAGE){
         widgetSelector++;
         if(widgetSelector > numberOfWidgets){
           widgetSelector = 0;
@@ -360,7 +369,7 @@ void handleInput(){
   
   if (button_down != lastb_down) {
     if (button_down == HIGH) {
-      if(pageIndex == CLOCK_PAGE){
+      if(pageIndex == HOME_PAGE){
         widgetSelector--;
         if(widgetSelector < 0){
           widgetSelector = numberOfWidgets;
@@ -389,10 +398,12 @@ void handleInput(){
   
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
-      if(pageIndex == CLOCK_PAGE){
-        pageIndex++;
-        if(pageIndex > MAX_PAGES){
-           pageIndex = 0; 
+      if(pageIndex == HOME_PAGE){
+        if(widgetSelector == 3){
+          pageIndex = NOTIFICATION_MENU;
+        } else if(widgetSelector == 4){
+          //todo add timer page
+          Serial.println("Go in to timer.");
         }
         Y_OFFSET = 0;
       } else if(pageIndex == NOTIFICATION_MENU){
@@ -401,7 +412,7 @@ void handleInput(){
         } else {
           //remove the notification
           menuSelector = 0;//rest the selector
-          pageIndex = CLOCK_PAGE;// go back to list of notifications
+          pageIndex = HOME_PAGE;// go back to list of notifications
         }
       } else if(pageIndex == NOTIFICATION_BIG){
         shouldRemove = true;

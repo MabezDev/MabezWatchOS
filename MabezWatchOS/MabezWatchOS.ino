@@ -307,51 +307,88 @@ void alert(){
     digitalWrite(VIBRATE_PIN,LOW);
 }
 
-void handleMenuInput(){
+void handleInput(){
   button_down = digitalRead(DOWN_BUTTON);
   button_up = digitalRead(UP_BUTTON);
   button_ok = digitalRead(OK_BUTTON);
-  
+
   if (button_up != lastb_up) {
     if (button_up == HIGH) {
-      menuSelector++;
-      //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
-      if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
-        //shift the y down
-        Y_OFFSET -= MENU_ITEM_HEIGHT;
+      if(pageIndex == CLOCK_PAGE){
+        
+      } else if(pageIndex == NOTIFICATION_MENU){
+        menuSelector++;
+        //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
+        if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
+          //shift the y down
+          Y_OFFSET -= MENU_ITEM_HEIGHT;
+        }
+        if(menuSelector >= notificationIndex){
+           menuSelector = notificationIndex; 
+        }
+      } else if(pageIndex == NOTIFICATION_BIG){
+        if( (lineCount - currentLine) >= 6){
+        //this scrolls down
+        Y_OFFSET -= FONT_HEIGHT;
+        currentLine++;
       }
-      if(menuSelector >= notificationIndex){
-         menuSelector = notificationIndex; 
+      } else {
+        Serial.println("Unknown Page."); 
       }
-      
     }
     lastb_up = button_up;
   }
   
   if (button_down != lastb_down) {
     if (button_down == HIGH) {
-      menuSelector--;
-      if(menuSelector < 0){
-         menuSelector = 0; 
+      if(pageIndex == CLOCK_PAGE){
+        
+      } else if(pageIndex == NOTIFICATION_MENU){
+        menuSelector--;
+        if(menuSelector < 0){
+           menuSelector = 0; 
+        }
+        //plus y
+        if((menuSelector >= 3)){
+          Y_OFFSET += MENU_ITEM_HEIGHT;
+        }
+      } else if(pageIndex == NOTIFICATION_BIG){
+        if(currentLine > 0){
+        //scrolls back up
+        Y_OFFSET += FONT_HEIGHT;
+        currentLine--;
       }
-      //plus y
-      if((menuSelector >= 3)){
-        Y_OFFSET += MENU_ITEM_HEIGHT;
+      } else {
+        Serial.println("Unknown Page."); 
       }
-      
     }
     lastb_down = button_down;
   } 
   
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
-      if(menuSelector != notificationIndex){//last one is the back item
-        pageIndex = NOTIFICATION_BIG;
+      if(pageIndex == CLOCK_PAGE){
+        pageIndex++;
+        if(pageIndex > MAX_PAGES){
+           pageIndex = 0; 
+        }
+        Y_OFFSET = 0;
+      } else if(pageIndex == NOTIFICATION_MENU){
+        if(menuSelector != notificationIndex){//last one is the back item
+          pageIndex = NOTIFICATION_BIG;
+        } else {
+          //remove the notification
+          menuSelector = 0;//rest the selector
+          pageIndex = CLOCK_PAGE;// go back to list of notifications
+        }
+      } else if(pageIndex == NOTIFICATION_BIG){
+        shouldRemove = true;
+        Y_OFFSET = 0;
+        lineCount = 0;//reset number of lines
+        currentLine = 0;// reset currentLine back to zero
+        pageIndex = NOTIFICATION_MENU;
       } else {
-        menuSelector = 0;//reset the selector
-        Y_OFFSET = 0;//reset any scrolling done
-        pageIndex = CLOCK_PAGE;// go back to list of notifications
-        
+        Serial.println("Unknown Page."); 
       }
     }
     lastb_ok = button_ok;
@@ -403,46 +440,6 @@ void fullNotification(int chosenNotification){
   }
 }
 
-void handleNotificationInput(){
-  button_ok = digitalRead(OK_BUTTON);
-  button_down = digitalRead(DOWN_BUTTON);
-  button_up = digitalRead(UP_BUTTON);
-  
-  if (button_ok != lastb_ok) {
-    if (button_ok == HIGH) {
-      //sets flag for removal of this notification
-      shouldRemove = true;
-      Y_OFFSET = 0;
-      lineCount = 0;//reset number of lines
-      currentLine = 0;// reset currentLine back to zero
-      pageIndex = NOTIFICATION_MENU;
-    }
-    lastb_ok = button_ok;
-  }
-
-  if (button_up != lastb_up) {
-    if (button_up == HIGH) {
-      if( (lineCount - currentLine) >= 6){
-        //this scrolls down
-        Y_OFFSET -= FONT_HEIGHT;
-        currentLine++;
-      }
-    }
-    lastb_up = button_up;
-  }
-  
-  if (button_down != lastb_down) {
-    if (button_down == HIGH) {
-      if(currentLine > 0){
-        //scrolls back up
-        Y_OFFSET += FONT_HEIGHT;
-        currentLine--;
-      }
-    }
-    lastb_down = button_down;
-  } 
-}
-
 void loop(void) {
   u8g_FirstPage(&u8g);  
   do {
@@ -452,11 +449,7 @@ void loop(void) {
       case 2: fullNotification(menuSelector); break;
     }
   } while( u8g_NextPage(&u8g) );
-    switch(pageIndex){
-      case 0: clockInput(); break;
-      case 1: handleMenuInput(); break;
-      case 2: handleNotificationInput(); break;
-    }
+    handleInput();
     while(HWSERIAL.available())
     {
       byte incoming = HWSERIAL.read();
@@ -588,23 +581,6 @@ void showNotifications(){
   }
   y = 0;
 }
-
-void clockInput(){
-  button_ok = digitalRead(OK_BUTTON);
-  
-  if (button_ok != lastb_ok) {
-    if (button_ok == HIGH) {
-      pageIndex++;
-      if(pageIndex > MAX_PAGES){
-         pageIndex = 0; 
-      }
-      Y_OFFSET = 0;
-    }
-    lastb_ok = button_ok;
-  } 
-  
-}
-
 
 void getNotification(String notificationItem){
   //split the <n>

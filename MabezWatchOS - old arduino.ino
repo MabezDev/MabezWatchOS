@@ -140,51 +140,72 @@ void setup(void) {
   notificationIndex++;
 }
 
-void handleMenuInput(){
+void handleInput(){
   button_down = digitalRead(DOWN_BUTTON);
   button_up = digitalRead(UP_BUTTON);
   button_ok = digitalRead(OK_BUTTON);
-  
+
   if (button_up != lastb_up) {
     if (button_up == HIGH) {
-      menuSelector++;
-      //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
-      if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
-        //shift the y down
-        Y_OFFSET -= MENU_ITEM_HEIGHT;
+      if(pageIndex == CLOCK_PAGE){
+        
+      } else if(pageIndex == NOTIFICATION_MENU){
+        menuSelector++;
+        //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
+        if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
+          //shift the y down
+          Y_OFFSET -= MENU_ITEM_HEIGHT;
+        }
+        if(menuSelector >= notificationIndex){
+           menuSelector = notificationIndex; 
+        }
+      } else if(pageIndex == NOTIFICATION_BIG){
+        
+      } else {
+        Serial.println("Unknown Page."); 
       }
-      if(menuSelector >= notificationIndex){
-         menuSelector = notificationIndex; 
-      }
-      
     }
     lastb_up = button_up;
   }
   
   if (button_down != lastb_down) {
     if (button_down == HIGH) {
-      menuSelector--;
-      if(menuSelector < 0){
-         menuSelector = 0; 
+      if(pageIndex == CLOCK_PAGE){
+        
+      } else if(pageIndex == NOTIFICATION_MENU){
+        menuSelector--;
+        if(menuSelector < 0){
+           menuSelector = 0; 
+        }
+        //plus y
+        if((menuSelector >= 3)){
+          Y_OFFSET += MENU_ITEM_HEIGHT;
+        }
+      } else if(pageIndex == NOTIFICATION_BIG){
+        
+      } else {
+        Serial.println("Unknown Page."); 
       }
-      //plus y
-      if((menuSelector >= 3)){
-        Serial.println("Scrolling Down 1 Item!");
-        Y_OFFSET += MENU_ITEM_HEIGHT;
-      }
-      
     }
     lastb_down = button_down;
   } 
   
   if (button_ok != lastb_ok) {
     if (button_ok == HIGH) {
-      if(menuSelector != notificationIndex){//last one is the back item
-        pageIndex = NOTIFICATION_BIG;
+      if(pageIndex == CLOCK_PAGE){
+        
+      } else if(pageIndex == NOTIFICATION_MENU){
+        if(menuSelector != notificationIndex){//last one is the back item
+          pageIndex = NOTIFICATION_BIG;
+        } else {
+          //remove the notification
+          menuSelector = 0;//rest the selector
+          pageIndex = CLOCK_PAGE;// go back to list of notifications
+        }
+      } else if(pageIndex == NOTIFICATION_BIG){
+        
       } else {
-        //remove the notification
-        menuSelector = 0;//rest the selector
-        pageIndex = CLOCK_PAGE;// go back to list of notifications
+        Serial.println("Unknown Page."); 
       }
     }
     lastb_ok = button_ok;

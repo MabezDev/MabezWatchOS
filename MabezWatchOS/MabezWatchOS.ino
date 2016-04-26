@@ -62,7 +62,7 @@ String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Se
 String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 //weather vars
 boolean weatherData = false; 
-String weatherDay = "Sun";
+String weatherDay = "Unknown";
 String weatherTemperature = "Unknown";
 String weatherForecast = "Forecast devoid.";
 
@@ -112,6 +112,8 @@ const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr 
 //navigation vars
 int pageIndex = 0;
 int menuSelector = 0;
+int widgetSelector = 0;
+int numberOfWidgets = 2; // actually 3, 0,1,2.
 
 const int x = 6;
 int y = 0; 
@@ -186,10 +188,10 @@ void drawClock(int hour, int minute,int second){
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
   u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
   
-  if(weatherData){
-    weatherWidget();
-  } else {
-    timeDateWidget();
+  switch(widgetSelector){
+    case 0: timeDateWidget(); break;
+    case 1: digitalClockWidget(); break;
+    case 2: weatherWidget(); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -216,19 +218,33 @@ void drawClock(int hour, int minute,int second){
 void timeDateWidget(){
   //display date from RTC
   u8g_SetFont(&u8g, u8g_font_7x14);
-
-  /*if(tm.Day< 10){
-      dateDay = "0" + String(tm.Day);
-    } else {
-      dateDay = String(tm.Day);
-    }*/
-  
   u8g_DrawStr(&u8g,72,20+14,days[dateArray[3] - 1].c_str());
-  u8g_DrawStr(&u8g,72,34+14,String(dateArray[0]).c_str());
+  u8g_DrawStr(&u8g,72,34+14,intTo2Chars(dateArray[0]).c_str());
   u8g_DrawStr(&u8g,90,34+14,months[dateArray[1] - 1].c_str());
   u8g_DrawStr(&u8g,72,48+14,String(dateArray[2]).c_str());
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
+
+void digitalClockWidget(){
+  u8g_SetFont(&u8g, u8g_font_7x14);
+  u8g_DrawFrame(&u8g,68,28,60,16);
+  u8g_DrawStr(&u8g,69,28+14,intTo2Chars(clockArray[0]).c_str());
+  u8g_DrawStr(&u8g,83,28+14,":");
+  u8g_DrawStr(&u8g,91,28+14,intTo2Chars(clockArray[1]).c_str());
+  u8g_DrawStr(&u8g,105,28+14,":");
+  u8g_DrawStr(&u8g,113,28+14,intTo2Chars(clockArray[2]).c_str());
+  u8g_SetFont(&u8g, u8g_font_6x12);
+}
+
+String intTo2Chars(int number){
+  if(number < 10){
+    return "0" + String(number);
+  } else {
+    return String(number);
+  }
+  
+}
+
 void weatherWidget(){
   //change fonts
   u8g_SetFont(&u8g, u8g_font_7x14);
@@ -315,7 +331,10 @@ void handleInput(){
   if (button_up != lastb_up) {
     if (button_up == HIGH) {
       if(pageIndex == CLOCK_PAGE){
-        
+        widgetSelector++;
+        if(widgetSelector > numberOfWidgets){
+          widgetSelector = 0;
+        }
       } else if(pageIndex == NOTIFICATION_MENU){
         menuSelector++;
         //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
@@ -342,7 +361,10 @@ void handleInput(){
   if (button_down != lastb_down) {
     if (button_down == HIGH) {
       if(pageIndex == CLOCK_PAGE){
-        
+        widgetSelector--;
+        if(widgetSelector < 0){
+          widgetSelector = numberOfWidgets;
+        }
       } else if(pageIndex == NOTIFICATION_MENU){
         menuSelector--;
         if(menuSelector < 0){
@@ -452,6 +474,7 @@ void loop(void) {
     handleInput();
     while(HWSERIAL.available())
     {
+      //use char[] instead of string limit to 320 chars or something
       byte incoming = HWSERIAL.read();
       message+=char(incoming);//store string from serial command
       delay(1);
@@ -585,6 +608,8 @@ void showNotifications(){
 void getNotification(String notificationItem){
   //split the <n>
   notificationItem.remove(0,3);
+  // char meta[15] for pkg and title
+  // char data[150] for data
   String temp[3];
   int index = 0;
   for(int i=0; i < notificationItem.length();i++){

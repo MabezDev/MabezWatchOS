@@ -21,17 +21,15 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm. 
  * 
- * Important:
- *  -The DS1302 lib im using does not support the Week day feature, need to use a new library.
- * 
  * Update: 
  *  -Made UI Look much nicer.
  *  -Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData
+ *  -fixed RTC not setting/receiving the year
  *  
  *  Buglist:
  *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
  *  -Need to remove all mentions of string and change to char array so save even more RAM
- *  - if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations
+ *  - if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations (Solution remove string (Use char[]), only allow max payload size of something)
  *
  *  Todo: 
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
@@ -39,7 +37,9 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    -add month and year
  *    -add reply phrases, if they are short answers like yeah nah, busy right now etc.
  *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
- *    need to completely remove string from this sketch, and use char[] instead
+ *    -need to completely remove string from this sketch, and use char[] instead
+ *    -text wrapping on the full notification page
+ *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use
  */
 
 //input vars
@@ -216,9 +216,17 @@ void drawClock(int hour, int minute,int second){
 void timeDateWidget(){
   //display date from RTC
   u8g_SetFont(&u8g, u8g_font_7x14);
-  u8g_DrawStr(&u8g,72,20+14,days[dateArray[0] - 1].c_str());
-  u8g_DrawStr(&u8g,72,34+14,String(dateArray[1]).c_str());
-  u8g_DrawStr(&u8g,90,34+14,months[dateArray[2] - 1].c_str());
+
+  /*if(tm.Day< 10){
+      dateDay = "0" + String(tm.Day);
+    } else {
+      dateDay = String(tm.Day);
+    }*/
+  
+  u8g_DrawStr(&u8g,72,20+14,days[dateArray[3] - 1].c_str());
+  u8g_DrawStr(&u8g,72,34+14,String(dateArray[0]).c_str());
+  u8g_DrawStr(&u8g,90,34+14,months[dateArray[1] - 1].c_str());
+  u8g_DrawStr(&u8g,72,48+14,String(dateArray[2]).c_str());
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
 void weatherWidget(){
@@ -257,20 +265,18 @@ void updateSystem(){
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
     clockArray[2] = tm.Second;
-    /*if(tm.Day< 10){
-      dateDay = "0" + String(tm.Day);
-    } else {
-      dateDay = String(tm.Day);
-    }
-    dateMonth = tm.Month;*/
-    dateArray[0]  = tm.Wday;
-    dateArray[1] = tm.Day;
-    dateArray[2] = tm.Month;
-    dateArray[3] = tm.Year;
-    Serial.println(tm.Wday);
+  
+    dateArray[0] = tm.Day;
+    dateArray[1] = tm.Month;
+    dateArray[2] = tmYearToCalendar(tm.Year);
+    dateArray[3]  = tm.Wday;
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
     batteryPercentage = ((batteryVoltage - 3)/1.2)*100;
+    //make sure we never display a negative percentage
+    if(batteryPercentage < 0){
+      batteryPercentage = 0;
+    }
   }
 }
 
@@ -651,7 +657,6 @@ void getTimeFromDevice(String message){
      boolean after = true;
      for(int i = 0; i< message.length();i++){
       if(after){
-        //todo: need to get date data here, first format the date coming from the smartphone so that the month in a int
        if(message.charAt(i)==' '){
           dateArray[dateIndex] = dateNtime[0].toInt();
           Serial.println(dateArray[dateIndex]);
@@ -684,8 +689,8 @@ void getTimeFromDevice(String message){
      //Read from the RTC
      RTC.read(tm);
      //Compare to time from Device(only minutes and hours doesn't have to be perfect)
-     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[1] == tm.Day && dateArray[2] == tm.Month && dateArray[3] == tm.Year && tm.Wday == dateArray[0]))){
-        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2],dateArray[3]);
+     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[1] == tm.Day && dateArray[2] == tm.Month && dateArray[3] == tm.Year))){
+        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
         Serial.println(F("Setting the clock!"));
      } else {
         //if it's correct we do not have to set the RTC and we just keep using the RTC's time
@@ -695,22 +700,14 @@ void getTimeFromDevice(String message){
 }
 
 
-void setClockTime(int hours,int minutes,int seconds,int DoW, int days, int months, int years){// DoW = DayOfWeek
+void setClockTime(int hours,int minutes,int seconds, int days, int months, int years){// DoW = DayOfWeek
   tm.Hour = hours;
   tm.Minute = minutes;
   tm.Second = seconds;
   tm.Day = days;
   tm.Month = months;
-  tm.Year = years;
-  Serial.print("Setting clock to day : ");
-  Serial.println(DoW);
-  Serial.print("Setting day : ");
-  Serial.println(days);
-  Serial.print("Setting months : ");
-  Serial.println(months);
-  Serial.print("Setting years : ");
-  Serial.println(years);
-  tm.Wday = DoW;
+  //This is correct
+  tm.Year = CalendarYrToTm(years);
   t = makeTime(tm);
   if(RTC.set(t) == 0) { // Success
     setTime(t);

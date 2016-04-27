@@ -26,6 +26,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(19/04/16)Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData
  *  -(25/04/16)Fixed RTC not setting/receiving the year
  *  -(26/04/16)Added a menu/widget service for the main page
+ *  -(27/04/16)Fixed RTC showing AM instead of PM and visa versa
  *  
  *  Buglist:
  *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
@@ -42,6 +43,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    -text wrapping on the full notification page
  *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use
  *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one
+ *    - fix the alert function to have two pulses without delay
  */
 
 //input vars
@@ -202,10 +204,6 @@ void drawClock(int hour, int minute,int second){
     case 2: weatherWidget(); break;
     case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,85,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    //possible widgets:
-    //go to messages
-    //timer
-    //
   }
 
   //status bar - 15 px high for future icon ref
@@ -292,6 +290,8 @@ void updateSystem(){
   if(current - prevMillis >= clockUpdateInterval){
     prevMillis = current;
     RTC.read(tm);
+    Serial.print("Hour: ");
+    Serial.println(tm.Hour);
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
     clockArray[2] = tm.Second;
@@ -306,6 +306,9 @@ void updateSystem(){
     if(batteryPercentage < 0){
       batteryPercentage = 0;
     }
+
+    Serial.print("Free RAM: ");
+    Serial.println(FreeRam());
   }
 }
 
@@ -536,13 +539,15 @@ void loop(void) {
   if(readyToProcess){
     Serial.println("Received: "+finalData);
     if(finalData.startsWith("<n>")){
+          Serial.print("Free RAM: ");
+          Serial.println(FreeRam());
           if(!(notificationIndex >= notificationMax)){
             getNotification(finalData);
           } else {
             Serial.println("Hit max notifications, need to pop off some");
             resetTransmissionData();
           }
-          alert();
+          //alert(); TODO: fix this alert to have two pulses without delay
     }else if(finalData.startsWith("<d>")){  
       if(!gotUpdatedTime){
         getTimeFromDevice(finalData); 
@@ -666,37 +671,33 @@ void getTimeFromDevice(String message){
   message.remove(0,3);
   String dateNtime[2] = {"",""};
   int dateIndex = 0;
-     boolean after = true;
+  int clockLoopIndex = 0;
+     boolean gotDate = false;
      for(int i = 0; i< message.length();i++){
-      if(after){
+      if(!gotDate){
        if(message.charAt(i)==' '){
-          dateArray[dateIndex] = dateNtime[0].toInt();
-          Serial.println(dateArray[dateIndex]);
-          dateNtime[0] = "";
+          dateArray[dateIndex] = dateNtime[1].toInt();
+          dateNtime[1] = "";
           dateIndex++;
-          if(dateIndex > 3){
-            after = false;
+          if(dateIndex >= 3){
+            gotDate = true;
           } 
        } else {
-        dateNtime[0] += message.charAt(i);
+        dateNtime[1] += message.charAt(i);
+        
        }
       } else {
-        dateNtime[1] += message.charAt(i);
+        dateNtime[0] += message.charAt(i);
+        if(message.charAt(i)==':'){
+            clockArray[clockLoopIndex] = dateNtime[0].toInt();
+            dateNtime[0] = "";
+            clockLoopIndex++;
+        }
       }
       
      }
-     int clockIndex = 0;
-     String temp = "";
-     for(int j=0; j < dateNtime[1].length();j++){
-        if(dateNtime[1].charAt(j)==':'){
-          clockIndex++;
-          temp="";
-        } else {
-          temp += dateNtime[1].charAt(j);
-          clockArray[clockIndex] = temp.toInt();
-        }
-     }
-
+     Serial.print("TIME: ");
+     Serial.println(dateNtime[0]);
      
      //Read from the RTC
      RTC.read(tm);
@@ -713,6 +714,10 @@ void getTimeFromDevice(String message){
 
 
 void setClockTime(int hours,int minutes,int seconds, int days, int months, int years){// DoW = DayOfWeek
+  
+  Serial.print("Hours: ");
+  Serial.println(hours);
+  
   tm.Hour = hours;
   tm.Minute = minutes;
   tm.Second = seconds;

@@ -27,6 +27,8 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(25/04/16)Fixed RTC not setting/receiving the year
  *  -(26/04/16)Added a menu/widget service for the main page
  *  -(27/04/16)Fixed RTC showing AM instead of PM and visa versa
+ *  -(28/04/16)Oled has ceased to work, might have killed it with static, as I don't see how it could have broken just like that. When new oled arrives continue with the timer app,
+ *             will work on capacitive touch buttons and the input side for now.
  *  
  *  Buglist:
  *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things
@@ -36,14 +38,16 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  Todo: 
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use.
  *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
- *    -add month and year
+ *    -add month and year - DONE
  *    -add reply phrases, if they are short answers like yeah nah, busy right now etc.
  *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
  *    -need to completely remove string from this sketch, and use char[] instead
  *    -text wrapping on the full notification page
- *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use
+ *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use - DONE
  *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one
  *    - fix the alert function to have two pulses without delay
+ *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side)
+ *    - finish timer app (use our system click to time the seconds)
  */
 
 //input vars
@@ -109,7 +113,7 @@ const int PROGMEM VIBRATE_PIN = 10;
 const int PROGMEM HOME_PAGE = 0;
 const int PROGMEM NOTIFICATION_MENU = 1;
 const int PROGMEM NOTIFICATION_BIG = 2;
-const int PROGMEM TIMER = 1;
+const int PROGMEM TIMER = 4;
 const int PROGMEM MENU_ITEM_HEIGHT = 16;
 const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions  
 
@@ -129,6 +133,11 @@ int currentLine = 0;
 //batt monitoring
 float batteryVoltage = 0;
 int batteryPercentage = 0;
+
+//timer variables
+int timerArray[3] = {0,0,0}; // h/m/s
+boolean isRunning = false;
+int timerIndex = 0;
 
 //connection
 boolean isConnected = false;
@@ -160,6 +169,7 @@ void setup(void) {
    * Could at HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
    */
    HWSERIAL.print("AT");
+   Serial.println("Setup Complete!");
 }
 
 void u8g_prepare(void) {
@@ -307,7 +317,7 @@ void updateSystem(){
       batteryPercentage = 0;
     }
 
-    Serial.print("Free RAM: ");
+    Serial.print("Free RAMAGE: ");
     Serial.println(FreeRam());
   }
 }
@@ -336,100 +346,137 @@ void alert(){
 }
 
 void handleInput(){
+  boolean dualClick = false;
   button_down = digitalRead(DOWN_BUTTON);
   button_up = digitalRead(UP_BUTTON);
   button_ok = digitalRead(OK_BUTTON);
 
-  if (button_up != lastb_up) {
-    if (button_up == HIGH) {
-      if(pageIndex == HOME_PAGE){
-        widgetSelector++;
-        if(widgetSelector > numberOfWidgets){
-          widgetSelector = 0;
-        }
-      } else if(pageIndex == NOTIFICATION_MENU){
-        menuSelector++;
-        //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
-        if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
-          //shift the y down
-          Y_OFFSET -= MENU_ITEM_HEIGHT;
-        }
-        if(menuSelector >= notificationIndex){
-           menuSelector = notificationIndex; 
-        }
-      } else if(pageIndex == NOTIFICATION_BIG){
-        if( (lineCount - currentLine) >= 6){
-        //this scrolls down
-        Y_OFFSET -= FONT_HEIGHT;
-        currentLine++;
-      }
-      } else {
-        Serial.println("Unknown Page."); 
-      }
+  //check for double click first
+  if (button_up != lastb_up && button_down != lastb_down) {
+    if (button_up == HIGH && button_down == HIGH) {
+        Serial.println("Dual click detected.");
+        dualClick = true;
     }
     lastb_up = button_up;
-  }
-  
-  if (button_down != lastb_down) {
-    if (button_down == HIGH) {
-      if(pageIndex == HOME_PAGE){
-        widgetSelector--;
-        if(widgetSelector < 0){
-          widgetSelector = numberOfWidgets;
-        }
-      } else if(pageIndex == NOTIFICATION_MENU){
-        menuSelector--;
-        if(menuSelector < 0){
-           menuSelector = 0; 
-        }
-        //plus y
-        if((menuSelector >= 3)){
-          Y_OFFSET += MENU_ITEM_HEIGHT;
-        }
-      } else if(pageIndex == NOTIFICATION_BIG){
-        if(currentLine > 0){
-        //scrolls back up
-        Y_OFFSET += FONT_HEIGHT;
-        currentLine--;
-      }
-      } else {
-        Serial.println("Unknown Page."); 
-      }
-    }
     lastb_down = button_down;
-  } 
-  
-  if (button_ok != lastb_ok) {
-    if (button_ok == HIGH) {
-      if(pageIndex == HOME_PAGE){
-        if(widgetSelector == 3){
-          pageIndex = NOTIFICATION_MENU;
-        } else if(widgetSelector == 4){
-          //todo add timer page
-          Serial.println("Go in to timer.");
-        }
-        Y_OFFSET = 0;
-      } else if(pageIndex == NOTIFICATION_MENU){
-        if(menuSelector != notificationIndex){//last one is the back item
-          pageIndex = NOTIFICATION_BIG;
-        } else {
-          //remove the notification
-          menuSelector = 0;//rest the selector
-          pageIndex = HOME_PAGE;// go back to list of notifications
-        }
-      } else if(pageIndex == NOTIFICATION_BIG){
-        shouldRemove = true;
-        Y_OFFSET = 0;
-        lineCount = 0;//reset number of lines
-        currentLine = 0;// reset currentLine back to zero
-        pageIndex = NOTIFICATION_MENU;
-      } else {
-        Serial.println("Unknown Page."); 
-      }
-    }
-    lastb_ok = button_ok;
   }
-   
+  
+  if(!dualClick){
+    if (button_up != lastb_up) {
+      if (button_up == HIGH) {
+        if(pageIndex == HOME_PAGE){
+          widgetSelector++;
+          if(widgetSelector > numberOfWidgets){
+            widgetSelector = 0;
+          }
+        } else if(pageIndex == NOTIFICATION_MENU){
+          menuSelector++;
+          //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
+          if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
+            //shift the y down
+            Y_OFFSET -= MENU_ITEM_HEIGHT;
+          }
+          if(menuSelector >= notificationIndex){
+             menuSelector = notificationIndex; 
+          }
+        } else if(pageIndex == NOTIFICATION_BIG){
+          if( (lineCount - currentLine) >= 6){
+          //this scrolls down
+          Y_OFFSET -= FONT_HEIGHT;
+          currentLine++;
+        }
+        } else if(pageIndex == TIMER){
+          
+        } else {
+          Serial.println("Unknown Page."); 
+        }
+      }
+      lastb_up = button_up;
+    }
+    
+    if (button_down != lastb_down) {
+      if (button_down == HIGH) {
+        if(pageIndex == HOME_PAGE){
+          widgetSelector--;
+          if(widgetSelector < 0){
+            widgetSelector = numberOfWidgets;
+          }
+        } else if(pageIndex == NOTIFICATION_MENU){
+          menuSelector--;
+          if(menuSelector < 0){
+             menuSelector = 0; 
+          }
+          //plus y
+          if((menuSelector >= 3)){
+            Y_OFFSET += MENU_ITEM_HEIGHT;
+          }
+        } else if(pageIndex == NOTIFICATION_BIG){
+          if(currentLine > 0){
+          //scrolls back up
+          Y_OFFSET += FONT_HEIGHT;
+          currentLine--;
+        }
+        } else if(pageIndex == TIMER){
+          
+        } else {
+          Serial.println("Unknown Page."); 
+        }
+      }
+      lastb_down = button_down;
+    } 
+    
+    if (button_ok != lastb_ok) {
+      if (button_ok == HIGH) {
+        if(pageIndex == HOME_PAGE){
+          if(widgetSelector == 3){
+            pageIndex = NOTIFICATION_MENU;
+          } else if(widgetSelector == TIMER){
+            pageIndex = TIMER;
+          }
+          Y_OFFSET = 0;
+        } else if(pageIndex == NOTIFICATION_MENU){
+          if(menuSelector != notificationIndex){//last one is the back item
+            pageIndex = NOTIFICATION_BIG;
+          } else {
+            //remove the notification
+            menuSelector = 0;//rest the selector
+            pageIndex = HOME_PAGE;// go back to list of notifications
+          }
+        } else if(pageIndex == NOTIFICATION_BIG){
+          shouldRemove = true;
+          Y_OFFSET = 0;
+          lineCount = 0;//reset number of lines
+          currentLine = 0;// reset currentLine back to zero
+          pageIndex = NOTIFICATION_MENU;
+        } else if(pageIndex == TIMER){
+          
+        } else {
+          Serial.println("Unknown Page."); 
+        }
+      }
+      lastb_ok = button_ok;
+    }
+    
+  }
+}
+
+void timerApp(){
+  // need to a add input for two button presses to get out of this app
+  u8g_DrawStr(&u8g, 24,23,"H");
+  u8g_DrawStr(&u8g, 54,23,"M");
+  u8g_DrawStr(&u8g, 84,23,"S");
+
+  u8g_DrawStr(&u8g, 24,35,String(timerArray[0]).c_str());
+  u8g_DrawStr(&u8g, 54,35,String(timerArray[1]).c_str());
+  u8g_DrawStr(&u8g, 84,35,String(timerArray[2]).c_str());
+
+  if(isRunning){
+    u8g_DrawStr(&u8g, 55,50,"Stop");
+  } else {
+    u8g_DrawStr(&u8g, 55,50,"Start");
+  }
+  
+  
 }
 
 void removeNotification(int pos){
@@ -483,6 +530,7 @@ void loop(void) {
       case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
       case 1: showNotifications(); break;
       case 2: fullNotification(menuSelector); break;
+      case 4: timerApp(); break;
     }
   } while( u8g_NextPage(&u8g) );
     handleInput();

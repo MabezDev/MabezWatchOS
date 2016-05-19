@@ -68,6 +68,23 @@ boolean lastb_up = false;
 boolean button_down = false;
 boolean lastb_down = false;
 
+#define CONFIRMATION_TIME 80 //length in time the button has to be pressed for it to be a valid press
+
+//need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
+#define UP_ONLY  4
+#define OK_ONLY  2
+#define DOWN_ONLY  1
+#define UP_OK  (UP_ONLY|OK_ONLY)
+#define UP_DOWN  (UP_ONLY|DOWN_ONLY)
+#define DOWN_OK  (OK_ONLY|DOWN_ONLY)
+#define ALL_THREE (UP_ONLY|OK_ONLY|DOWN_ONLY)
+#define NONE_OF_THEM  0
+
+#define isButtonPressed(pin)  (digitalRead(pin) == LOW)
+
+int lastVector = 0;
+long prevButtonPressed = 0;
+
 //serial retrieval vars
 //serial retrieval vars
 char message[100];
@@ -117,9 +134,9 @@ Notification notifications[8];
 boolean shouldRemove = false;
 
 //pin constants
-const int PROGMEM OK_BUTTON = 5;
-const int PROGMEM DOWN_BUTTON = 3;
-const int PROGMEM UP_BUTTON = 4;
+const int PROGMEM OK_BUTTON = 4;
+const int PROGMEM DOWN_BUTTON = 5;
+const int PROGMEM UP_BUTTON = 3;
 const int PROGMEM BATT_READ = A6;
 const int PROGMEM VIBRATE_PIN = 10;
 
@@ -398,24 +415,12 @@ void alert(){
 }
 
 void handleInput(){
-  boolean dualClick = false;
-  button_down = !digitalRead(DOWN_BUTTON);
-  button_up = !digitalRead(UP_BUTTON);
-  button_ok = !digitalRead(OK_BUTTON);
-
-  //check for double click first
-  if (button_up != lastb_up && button_down != lastb_down) {
-    if (button_up == HIGH && button_down == HIGH) {
-        Serial.println("Dual click detected.");
-        dualClick = true;
-    }
-    lastb_up = button_up;
-    lastb_down = button_down;
-  }
-
-  if(!dualClick){
-    if (button_up != lastb_up) {
-      if (button_up == HIGH) {
+  int  vector = getConfirmedInputVector();
+    if(vector!=lastVector){
+      if (vector == UP_DOWN){
+        Serial.println("Dual click detected!");
+      } else if (vector == UP_ONLY){
+        Serial.println("Up Click Detected");
         if(pageIndex == HOME_PAGE){
           widgetSelector++;
           if(widgetSelector > numberOfWidgets){
@@ -442,12 +447,8 @@ void handleInput(){
         } else {
           Serial.println("Unknown Page.");
         }
-      }
-      lastb_up = button_up;
-    }
-
-    if (button_down != lastb_down) {
-      if (button_down == HIGH) {
+      } else if(vector == DOWN_ONLY){
+        Serial.println("Down Click Detected");
         if(pageIndex == HOME_PAGE){
           widgetSelector--;
           if(widgetSelector < 0){
@@ -473,12 +474,8 @@ void handleInput(){
         } else {
           Serial.println("Unknown Page.");
         }
-      }
-      lastb_down = button_down;
-    }
-
-    if (button_ok != lastb_ok) {
-      if (button_ok == HIGH) {
+      } else if(vector == OK_ONLY){
+        Serial.println("OK Click Detected");
         if(pageIndex == HOME_PAGE){
           if(widgetSelector == 3){
             pageIndex = NOTIFICATION_MENU;
@@ -505,12 +502,53 @@ void handleInput(){
         } else {
           Serial.println("Unknown Page.");
         }
+      } else if(vector == ALL_THREE){
+        Serial.println("Return to menu Combo");
       }
-      lastb_ok = button_ok;
+      prevButtonPressed = millis();
     }
-
-  }
+    /*if(vector == NONE_OF_THEM){
+      if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
+        Serial.println("Time out input");
+        prevButtonPressed = 0;
+      }
+    }*/
+    lastVector = vector;
 }
+
+int getConfirmedInputVector()
+{
+  static int lastConfirmedVector = 0;
+  static int lastVector = -1;
+  static long unsigned int heldVector = 0L;
+
+  // Combine the inputs.
+  int rawVector =
+    isButtonPressed(OK_BUTTON) << 2 |
+    isButtonPressed(DOWN_BUTTON) << 1 |
+    isButtonPressed(UP_BUTTON) << 0;
+
+  // On a change in vector, don't return the new one!
+  if (rawVector != lastVector)
+  {
+    heldVector = millis();
+    lastVector = rawVector;
+    return lastConfirmedVector;
+  }
+
+  // We only update the confirmed vector after it has
+  // been held steady for long enough to rule out any
+  // accidental/sloppy half-presses or electric bounces.
+  //
+  long unsigned heldTime = (millis() - heldVector);
+  if (heldTime >= CONFIRMATION_TIME)
+  {
+    lastConfirmedVector = rawVector;
+  }
+
+  return lastConfirmedVector;
+}
+
 
 void timerApp(){
   // need to a add input for two button presses to get out of this app

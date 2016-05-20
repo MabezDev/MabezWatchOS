@@ -4,6 +4,7 @@
 #include <i2c_t3.h>
 #include <Time.h>
 #include <DS1302RTC.h>
+#include <EEPROM.h>
 #define HWSERIAL Serial1
 
 //needed for calculating Free RAM on ARM based MC's
@@ -191,6 +192,7 @@ String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget :",""};
 const int PROGMEM settingValueMin[numberOfSettings] = {0,0};
 const int PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,10};
 int settingValue[numberOfSettings] = {0,0}; //default
+bool hasRead = false;
 
 
 //icons
@@ -315,6 +317,10 @@ void settingsPage(){
   //load settings from eeprom then display
   //need a data struct for the setting text, and its value
   //enable editing of these settings
+  if(!hasRead){
+    readSettingsFromEEPROM();
+    hasRead = true;
+  }
   for(int i=0; i < numberOfSettings + 1;i++){
     int startY = 0;
     if(i==menuSelector){
@@ -655,15 +661,31 @@ void handleOkInput(){
       locked = !locked; //lock or unlock into a digit so we can manipulate it
     }
   } else if(pageIndex == SETTINGS){
-    if(menuSelector==(numberOfSettings)){
+    if(menuSelector==(numberOfSettings)){ //thisis the back button
       menuSelector = 0;
       pageIndex = HOME_PAGE;
+      hasRead = true; // reset this falg so we read in the newest settings from EEPROM
       //dont reset the widgetIndex to give the illusion we just came from there
     } else {
       locked = !locked;
+      if(!locked){
+        saveSettingToEEPROM(menuSelector);
+      }
     }
   } else {
     Serial.println("Unknown Page.");
+  }
+}
+
+void saveSettingToEEPROM(int address){
+  if(address < EEPROM.length()){
+    EEPROM.write(address,settingValue[address]);
+  }
+}
+
+void readSettingsFromEEPROM(){
+  for(int i=0; i < numberOfSettings; i++){
+    settingValue[i] = EEPROM.read(i);
   }
 }
 
@@ -800,7 +822,7 @@ void loop(void) {
       case 1: showNotifications(); break;
       case 2: fullNotification(menuSelector); break;
       case 4: timerApp(); break;
-      case 5: settingsPage(); break;
+      case 5: settingsPage(); break; //read the newst settings
     }
   } while( u8g_NextPage(&u8g) );
     handleInput();

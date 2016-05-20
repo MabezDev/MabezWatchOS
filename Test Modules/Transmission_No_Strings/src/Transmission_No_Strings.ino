@@ -107,9 +107,9 @@ void loop() {
       if(!receiving && startsWith(message,"<",1)){
         receiving = true;
       }else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
-        Serial.println("Message data missing, ignoring.");
         //we never recieved the end tag of a previous message
         //reset vars
+        Serial.println("Message data missing, ignoring.");
         messageIndex = 0;
         memset(message, 0, sizeof(message));
         resetTransmissionVariables();
@@ -159,6 +159,7 @@ void loop() {
       }
     } else if(startsWith(finalData,"<w>",3)){
       getWeatherData(finalData,finalDataIndex);
+      weatherData = true;
     } else if(startsWith(finalData,"<d>",3)){
       getTimeFromDevice(finalData,finalDataIndex);
     }

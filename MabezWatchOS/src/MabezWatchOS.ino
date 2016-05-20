@@ -31,12 +31,13 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(27/04/16)Fixed RTC showing AM instead of PM and visa versa
  *  -(28/04/16)OLED has ceased to work, might have killed it with static, as I don't see how it could have broken just like that. When new oled arrives continue with the timer app,
  *             will work on capacitive touch buttons, the app and other stuff that doesn't require the use of the OLED.
+ *  -(19/05/16)This firmware now only uses char arrays(No more heap fragmentation!) and now can support the detction of multibutton presses
+ *  -(19/05/16)New OLED, finished the timer app's basic functionality.
+ *  -(20/05/16) Settings page is impemented but need to add the eeprom storage functionality
  *
  *  Buglist:
- *  -Sending to many messages will overload the buffer and we will run out of SRAM, this needs to be controlled on the watch side of things -FIXED
- *  -Need to remove all mentions of string and change to char array so save even more RAM - TESTED
  *  -if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations
-    (Solution remove string (Use char[]), only allow max payload size of something) - TESTED
+    (Solution remove string (Use char[]), only allow max payload size of something) - NEEDS TESTING
  *
  *  Todo:
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. -TESTED
@@ -51,15 +52,17 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
           - change the widget to the favorite stored in the settings
  *    - fix the alert function to have two pulses without delay (Fix could be alertcounter set it to 2 then vibrate and -- from alertcounter)
  *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side)
- *    - finish timer app (use our system click to time the seconds)
+ *    - finish timer app (use our system click to time the seconds) - BASIC FUNCTIONALITY COMPLETE
+          - need to alert the suer when the timer is up
+          - make it look better
  *    -settings page
           - favourite widget (will default to once no input is recieved)
  *    -use eeprom to store the settings so we dont have to set them
  *    -the lithium charger board has a two leds one to show chargin one to show chargin done, need to hook into these to read when we are charging(to charge the RTC  batt(trickle charge))
        and to change the status on the watch to charging etc
- *    - [MAJOR] Fix the app, its barely working, crashes
  *    - add software turn off
  *    - add hardware power on/off
+ *    - add more weatherinfo screen where we can see the forecast for the next days or hours etc
  */
 
 //input vars
@@ -71,7 +74,7 @@ bool button_down = false;
 bool lastb_down = false;
 
 #define CONFIRMATION_TIME 80 //length in time the button has to be pressed for it to be a valid press
-#define INPUT_TIME_OUT 60000 //30 seconds
+#define INPUT_TIME_OUT 60000 //60 seconds
 
 //need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
 #define UP_ONLY  4
@@ -148,6 +151,9 @@ const int PROGMEM HOME_PAGE = 0;
 const int PROGMEM NOTIFICATION_MENU = 1;
 const int PROGMEM NOTIFICATION_BIG = 2;
 const int PROGMEM TIMER = 4;
+const int PROGMEM SETTINGS = 5;
+
+//UI constants
 const int PROGMEM MENU_ITEM_HEIGHT = 16;
 const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions
 
@@ -155,7 +161,8 @@ const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr 
 int pageIndex = 0;
 int menuSelector = 0;
 int widgetSelector = 0;
-int numberOfWidgets = 4; // actually 3, 0,1,2.
+int numberOfWidgets = 5; // actually 3, 0,1,2.
+int numberOfPages = 5; // actually 6
 
 const int x = 6;
 int y = 0;
@@ -177,6 +184,14 @@ boolean locked = false;
 //connection
 bool isConnected = false;
 int connectedTime = 0;
+
+//settings
+const int numberOfSettings = 2;
+String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget :",""};
+const int PROGMEM settingValueMin[numberOfSettings] = {0,0};
+const int PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,10};
+int settingValue[numberOfSettings] = {0,0}; //default
+
 
 //icons
 const byte PROGMEM BLUETOOTH_CONNECTED[] = {
@@ -250,7 +265,8 @@ void drawClock(int hour, int minute,int second){
     case 1: digitalClockWidget(); break;
     case 2: weatherWidget(); break;
     case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,85,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -293,6 +309,31 @@ void digitalClockWidget(){
   u8g_DrawStr(&u8g,105,28+14,":");
   u8g_DrawStr(&u8g,113,28+14,intTo2Chars(clockArray[2]).c_str());
   u8g_SetFont(&u8g, u8g_font_6x12);
+}
+
+void settingsPage(){
+  //load settings from eeprom then display
+  //need a data struct for the setting text, and its value
+  //enable editing of these settings
+  for(int i=0; i < numberOfSettings + 1;i++){
+    int startY = 0;
+    if(i==menuSelector){
+        u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
+    }
+    if(i!=numberOfSettings){
+      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[i].c_str());
+      u8g_DrawStr(&u8g,x+3 + 110,y+Y_OFFSET+FONT_HEIGHT,String(settingValue[i]).c_str());
+    } else {
+      u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
+    }
+    y += MENU_ITEM_HEIGHT;
+    u8g_DrawFrame(&u8g,x,startY,128,y +Y_OFFSET);
+  }
+  y = 0;
+  /*for(int i=0; i < 2; i++){ // is number of settings
+    u8g_DrawStr(&u8g,0,FONT_HEIGHT,settingKey[i].c_str());
+    u8g_DrawStr(&u8g,115,FONT_HEIGHT,String(settingValue[i]).c_str());
+  }*/
 }
 
 String intTo2Chars(int number){
@@ -453,6 +494,7 @@ void handleInput(){
       } else if(vector == ALL_THREE){
         Serial.println("Return to menu Combo");
         pageIndex = HOME_PAGE; // take us back to the home page
+        widgetSelector = settingValue[0];// and our fav widget
       }
       prevButtonPressed = millis();
     }
@@ -461,6 +503,7 @@ void handleInput(){
           Serial.println("Time out input");
           prevButtonPressed = 0;
           pageIndex = HOME_PAGE; // take us back to the home page
+          widgetSelector = settingValue[0]; //and our fav widget
         }
       }
     lastVector = vector;
@@ -480,15 +523,7 @@ void handleUpInput(){
       widgetSelector = 0;
     }
   } else if(pageIndex == NOTIFICATION_MENU){
-    menuSelector++;
-    //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
-    if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
-      //shift the y down
-      Y_OFFSET -= MENU_ITEM_HEIGHT;
-    }
-    if(menuSelector >= notificationIndex){
-       menuSelector = notificationIndex;
-    }
+    menuUp(notificationIndex);
   } else if(pageIndex == NOTIFICATION_BIG){
     if( (lineCount - currentLine) >= 6){
     //this scrolls down
@@ -504,8 +539,41 @@ void handleUpInput(){
         timerIndex = 0;
       }
     }
+  } else if(pageIndex == SETTINGS){
+    //check if were locked first (changing value)
+    if(locked){
+      settingValue[menuSelector]++;
+      if(settingValue[menuSelector] > settingValueMax[menuSelector]){
+        settingValue[menuSelector] = settingValueMax[menuSelector];;
+      }
+    } else {
+      menuUp(numberOfSettings);
+    }
   } else {
     Serial.println("Unknown Page.");
+  }
+}
+
+void menuUp(int size){
+  menuSelector++;
+  //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
+  if((menuSelector >= 4) && (((size + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
+    //shift the y down
+    Y_OFFSET -= MENU_ITEM_HEIGHT;
+  }
+  if(menuSelector >= size){
+     menuSelector = size;
+  }
+}
+
+void menuDown(){
+  menuSelector--;
+  if(menuSelector < 0){
+     menuSelector = 0;
+  }
+  //plus y
+  if((menuSelector >= 3)){
+    Y_OFFSET += MENU_ITEM_HEIGHT;
   }
 }
 
@@ -517,14 +585,7 @@ void handleDownInput(){
       widgetSelector = numberOfWidgets;
     }
   } else if(pageIndex == NOTIFICATION_MENU){
-    menuSelector--;
-    if(menuSelector < 0){
-       menuSelector = 0;
-    }
-    //plus y
-    if((menuSelector >= 3)){
-      Y_OFFSET += MENU_ITEM_HEIGHT;
-    }
+    menuDown();
   } else if(pageIndex == NOTIFICATION_BIG){
     if(currentLine > 0){
     //scrolls back up
@@ -543,6 +604,15 @@ void handleDownInput(){
         timerIndex = 4;
       }
     }
+  } else if(pageIndex == SETTINGS){
+    if(locked){
+      settingValue[menuSelector]--;
+      if(settingValue[menuSelector] < settingValueMin[menuSelector]){
+        settingValue[menuSelector] = settingValueMin[menuSelector];
+      }
+    } else {
+      menuDown();
+    }
   } else {
     Serial.println("Unknown Page.");
   }
@@ -553,8 +623,10 @@ void handleOkInput(){
   if(pageIndex == HOME_PAGE){
     if(widgetSelector == 3){
       pageIndex = NOTIFICATION_MENU;
-    } else if(widgetSelector == TIMER){
+    } else if(widgetSelector == 4){
       pageIndex = TIMER;
+    } else if(widgetSelector == 5){
+      pageIndex = SETTINGS;
     }
     Y_OFFSET = 0;
   } else if(pageIndex == NOTIFICATION_MENU){
@@ -581,6 +653,14 @@ void handleOkInput(){
         timerArray[2] = 0;
     }else {
       locked = !locked; //lock or unlock into a digit so we can manipulate it
+    }
+  } else if(pageIndex == SETTINGS){
+    if(menuSelector==(numberOfSettings)){
+      menuSelector = 0;
+      pageIndex = HOME_PAGE;
+      //dont reset the widgetIndex to give the illusion we just came from there
+    } else {
+      locked = !locked;
     }
   } else {
     Serial.println("Unknown Page.");
@@ -720,6 +800,7 @@ void loop(void) {
       case 1: showNotifications(); break;
       case 2: fullNotification(menuSelector); break;
       case 4: timerApp(); break;
+      case 5: settingsPage(); break;
     }
   } while( u8g_NextPage(&u8g) );
     handleInput();
@@ -860,6 +941,7 @@ void getWeatherData(char weatherItem[],int len){
   Serial.println(weatherTemperature);
   Serial.print("Forecast: ");
   Serial.println(weatherForecast);
+  weatherData = true;
 }
 
 int FreeRam() {

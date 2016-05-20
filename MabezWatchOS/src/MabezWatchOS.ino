@@ -44,31 +44,34 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    -add month and year - DONE
  *    -add reply phrases, if they are short answers like yeah, nah, busy right now etc.
  *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
- *    - [MAJOR] need to completely remove string from this sketch, and use char[] instead - TESTED
+ *    - [MAJOR] need to completely remove string from this sketch, and use char[] instead - DONE
  *    -text wrapping on the full notification page
  *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use - DONE
- *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - TESTED
+ *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - DONE
+          - change the widget to the favorite stored in the settings
  *    - fix the alert function to have two pulses without delay (Fix could be alertcounter set it to 2 then vibrate and -- from alertcounter)
  *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side)
  *    - finish timer app (use our system click to time the seconds)
  *    -settings page
+          - favourite widget (will default to once no input is recieved)
  *    -use eeprom to store the settings so we dont have to set them
  *    -the lithium charger board has a two leds one to show chargin one to show chargin done, need to hook into these to read when we are charging(to charge the RTC  batt(trickle charge))
        and to change the status on the watch to charging etc
  *    - [MAJOR] Fix the app, its barely working, crashes
  *    - add software turn off
- *    -add hardware power on/off
+ *    - add hardware power on/off
  */
 
 //input vars
-boolean button_ok = false;
-boolean lastb_ok = false;
-boolean button_up = false;
-boolean lastb_up = false;
-boolean button_down = false;
-boolean lastb_down = false;
+bool button_ok = false;
+bool lastb_ok = false;
+bool button_up = false;
+bool lastb_up = false;
+bool button_down = false;
+bool lastb_down = false;
 
 #define CONFIRMATION_TIME 80 //length in time the button has to be pressed for it to be a valid press
+#define INPUT_TIME_OUT 60000 //30 seconds
 
 //need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
 #define UP_ONLY  4
@@ -93,14 +96,14 @@ char finalData[250];
 int finalDataIndex = 0; //index is required as we dunno when we stop
 int messageIndex = 0;
 //int chunkCount = 0;
-boolean readyToProcess = false;
-boolean receiving = false;
+bool readyToProcess = false;
+bool receiving = false;
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
 String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 //weather vars
-boolean weatherData = false;
+bool weatherData = false;
 char weatherDay[4];
 char weatherTemperature[4];
 char weatherForecast[25];
@@ -113,7 +116,7 @@ int PROGMEM clockRadius = 32;
 const int PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
-boolean gotUpdatedTime = false;
+bool gotUpdatedTime = false;
 int clockArray[3] = {0,0,0};
 int dateArray[4] = {0,0,0,0};
 
@@ -131,7 +134,7 @@ int notificationIndex = 0;
 int PROGMEM notificationMax = 8;
 Notification notifications[8];
 
-boolean shouldRemove = false;
+bool shouldRemove = false;
 
 //pin constants
 const int PROGMEM OK_BUTTON = 4;
@@ -167,11 +170,12 @@ int batteryPercentage = 0;
 
 //timer variables
 int timerArray[3] = {0,0,0}; // h/m/s
-boolean isRunning = false;
+bool isRunning = false;
 int timerIndex = 0;
+boolean locked = false;
 
 //connection
-boolean isConnected = false;
+bool isConnected = false;
 int connectedTime = 0;
 
 //icons
@@ -191,7 +195,7 @@ void setup(void) {
   RTC.writeEN(false);
   u8g_prepare();
 
-  messagePtr = &message[0];
+  messagePtr = &message[0]; // could have used messagePtr = message
 
   //setup batt read pin
   analogReference(DEFAULT);
@@ -307,7 +311,7 @@ void weatherWidget(){
     u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay);
     u8g_DrawStr(&u8g,72,32+FONT_HEIGHT,weatherTemperature);
 
-    boolean canFit = true;
+    bool canFit = true;
     int lineIndex = 0;
     String twoLines[2];
     /*for(int i=0; i < weatherForecast.length(); i++){
@@ -354,6 +358,26 @@ void updateSystem(){
     //make sure we never display a negative percentage
     if(batteryPercentage < 0){
       batteryPercentage = 0;
+    }
+
+    if(isRunning){
+      if(timerArray[2] > 0){
+        timerArray[2]--;
+      } else {
+        if(timerArray[1] > 0){
+          timerArray[1]--;
+          timerArray[2] = 59;
+        } else {
+          if(timerArray[0] > 0){
+            timerArray[0]--;
+            timerArray[1] = 59;
+            timerArray[2] = 59;
+          } else {
+            isRunning = false;
+            //todo show a notifcation and vibrate to show timer is done
+          }
+        }
+      }
     }
 
     Serial.println("==============================================");
@@ -419,101 +443,148 @@ void handleInput(){
     if(vector!=lastVector){
       if (vector == UP_DOWN){
         Serial.println("Dual click detected!");
+        handleDualClick();
       } else if (vector == UP_ONLY){
-        Serial.println("Up Click Detected");
-        if(pageIndex == HOME_PAGE){
-          widgetSelector++;
-          if(widgetSelector > numberOfWidgets){
-            widgetSelector = 0;
-          }
-        } else if(pageIndex == NOTIFICATION_MENU){
-          menuSelector++;
-          //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
-          if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
-            //shift the y down
-            Y_OFFSET -= MENU_ITEM_HEIGHT;
-          }
-          if(menuSelector >= notificationIndex){
-             menuSelector = notificationIndex;
-          }
-        } else if(pageIndex == NOTIFICATION_BIG){
-          if( (lineCount - currentLine) >= 6){
-          //this scrolls down
-          Y_OFFSET -= FONT_HEIGHT;
-          currentLine++;
-        }
-        } else if(pageIndex == TIMER){
-
-        } else {
-          Serial.println("Unknown Page.");
-        }
+        handleUpInput();
       } else if(vector == DOWN_ONLY){
-        Serial.println("Down Click Detected");
-        if(pageIndex == HOME_PAGE){
-          widgetSelector--;
-          if(widgetSelector < 0){
-            widgetSelector = numberOfWidgets;
-          }
-        } else if(pageIndex == NOTIFICATION_MENU){
-          menuSelector--;
-          if(menuSelector < 0){
-             menuSelector = 0;
-          }
-          //plus y
-          if((menuSelector >= 3)){
-            Y_OFFSET += MENU_ITEM_HEIGHT;
-          }
-        } else if(pageIndex == NOTIFICATION_BIG){
-          if(currentLine > 0){
-          //scrolls back up
-          Y_OFFSET += FONT_HEIGHT;
-          currentLine--;
-        }
-        } else if(pageIndex == TIMER){
-
-        } else {
-          Serial.println("Unknown Page.");
-        }
+        handleDownInput();
       } else if(vector == OK_ONLY){
-        Serial.println("OK Click Detected");
-        if(pageIndex == HOME_PAGE){
-          if(widgetSelector == 3){
-            pageIndex = NOTIFICATION_MENU;
-          } else if(widgetSelector == TIMER){
-            pageIndex = TIMER;
-          }
-          Y_OFFSET = 0;
-        } else if(pageIndex == NOTIFICATION_MENU){
-          if(menuSelector != notificationIndex){//last one is the back item
-            pageIndex = NOTIFICATION_BIG;
-          } else {
-            //remove the notification
-            menuSelector = 0;//rest the selector
-            pageIndex = HOME_PAGE;// go back to list of notifications
-          }
-        } else if(pageIndex == NOTIFICATION_BIG){
-          shouldRemove = true;
-          Y_OFFSET = 0;
-          lineCount = 0;//reset number of lines
-          currentLine = 0;// reset currentLine back to zero
-          pageIndex = NOTIFICATION_MENU;
-        } else if(pageIndex == TIMER){
-
-        } else {
-          Serial.println("Unknown Page.");
-        }
+        handleOkInput();
       } else if(vector == ALL_THREE){
         Serial.println("Return to menu Combo");
+        pageIndex = HOME_PAGE; // take us back to the home page
       }
       prevButtonPressed = millis();
     }
-    /*if(vector == NONE_OF_THEM){
-      if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
-        Serial.println("Time out input");
-        prevButtonPressed = 0;
+      if(vector == NONE_OF_THEM){
+        if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
+          Serial.println("Time out input");
+          prevButtonPressed = 0;
+          pageIndex = HOME_PAGE; // take us back to the home page
+        }
       }
-    }*/
     lastVector = vector;
+}
+
+void handleDualClick(){
+  if(pageIndex = TIMER){
+      //locked = false;
+  }
+}
+
+void handleUpInput(){
+  Serial.println("Up Click Detected");
+  if(pageIndex == HOME_PAGE){
+    widgetSelector++;
+    if(widgetSelector > numberOfWidgets){
+      widgetSelector = 0;
+    }
+  } else if(pageIndex == NOTIFICATION_MENU){
+    menuSelector++;
+    //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
+    if((menuSelector >= 4) && (((notificationIndex + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
+      //shift the y down
+      Y_OFFSET -= MENU_ITEM_HEIGHT;
+    }
+    if(menuSelector >= notificationIndex){
+       menuSelector = notificationIndex;
+    }
+  } else if(pageIndex == NOTIFICATION_BIG){
+    if( (lineCount - currentLine) >= 6){
+    //this scrolls down
+    Y_OFFSET -= FONT_HEIGHT;
+    currentLine++;
+  }
+  } else if(pageIndex == TIMER){
+    if(locked){
+      timerArray[timerIndex]++;
+    } else {
+      timerIndex++;
+      if(timerIndex > 4){
+        timerIndex = 0;
+      }
+    }
+  } else {
+    Serial.println("Unknown Page.");
+  }
+}
+
+void handleDownInput(){
+  Serial.println("Down Click Detected");
+  if(pageIndex == HOME_PAGE){
+    widgetSelector--;
+    if(widgetSelector < 0){
+      widgetSelector = numberOfWidgets;
+    }
+  } else if(pageIndex == NOTIFICATION_MENU){
+    menuSelector--;
+    if(menuSelector < 0){
+       menuSelector = 0;
+    }
+    //plus y
+    if((menuSelector >= 3)){
+      Y_OFFSET += MENU_ITEM_HEIGHT;
+    }
+  } else if(pageIndex == NOTIFICATION_BIG){
+    if(currentLine > 0){
+    //scrolls back up
+    Y_OFFSET += FONT_HEIGHT;
+    currentLine--;
+  }
+  } else if(pageIndex == TIMER){
+    if(locked){
+      timerArray[timerIndex]--;
+      if(timerArray[timerIndex] < 0){
+        timerArray[timerIndex] = 0;
+      }
+    } else {
+      timerIndex--;
+      if(timerIndex < 0){
+        timerIndex = 4;
+      }
+    }
+  } else {
+    Serial.println("Unknown Page.");
+  }
+}
+
+void handleOkInput(){
+  Serial.println("OK Click Detected");
+  if(pageIndex == HOME_PAGE){
+    if(widgetSelector == 3){
+      pageIndex = NOTIFICATION_MENU;
+    } else if(widgetSelector == TIMER){
+      pageIndex = TIMER;
+    }
+    Y_OFFSET = 0;
+  } else if(pageIndex == NOTIFICATION_MENU){
+    if(menuSelector != notificationIndex){//last one is the back item
+      pageIndex = NOTIFICATION_BIG;
+    } else {
+      //remove the notification
+      menuSelector = 0;//rest the selector
+      pageIndex = HOME_PAGE;// go back to list of notifications
+    }
+  } else if(pageIndex == NOTIFICATION_BIG){
+    shouldRemove = true;
+    Y_OFFSET = 0;
+    lineCount = 0;//reset number of lines
+    currentLine = 0;// reset currentLine back to zero
+    pageIndex = NOTIFICATION_MENU;
+  } else if(pageIndex == TIMER){
+    if(timerIndex==3){
+      isRunning = !isRunning; //start/stop timer
+    } else if(timerIndex == 4){
+      Serial.println("Resetting timer.");
+        timerArray[0] = 0;
+        timerArray[1] = 0;
+        timerArray[2] = 0;
+    }else {
+      locked = !locked; //lock or unlock into a digit so we can manipulate it
+    }
+  } else {
+    Serial.println("Unknown Page.");
+  }
 }
 
 int getConfirmedInputVector()
@@ -549,6 +620,16 @@ int getConfirmedInputVector()
   return lastConfirmedVector;
 }
 
+void drawTriangle(int x, int y, int size, int direction){
+  switch (direction) {
+    case 1: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); break; //down
+    case 2: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); break; //up
+    case 3: u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); break; // left
+    case 4: u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); break; // right
+  }
+
+}
+
 
 void timerApp(){
   // need to a add input for two button presses to get out of this app
@@ -560,11 +641,29 @@ void timerApp(){
   u8g_DrawStr(&u8g, 54,35,String(timerArray[1]).c_str());
   u8g_DrawStr(&u8g, 84,35,String(timerArray[2]).c_str());
 
-  if(isRunning){
-    u8g_DrawStr(&u8g, 55,50,"Stop");
+  if(locked){
+    switch (timerIndex) {
+      case 0: drawTriangle(22,10,8,2); drawTriangle(22,38,8,1); break;
+      case 1: drawTriangle(52,10,8,2); drawTriangle(52,38,8,1); break;
+      case 2: drawTriangle(82,10,8,2); drawTriangle(82,38,8,1); break;
+    }
   } else {
-    u8g_DrawStr(&u8g, 55,50,"Start");
+    switch (timerIndex) {
+      case 0: drawTriangle(22,8,8,1); break;
+      case 1: drawTriangle(52,8,8,1);break;
+      case 2: drawTriangle(82,8,8,1); break;
+      case 3: u8g_DrawFrame(&u8g,28,45,34,13); break; //draw rectangle around this option
+      case 4: u8g_DrawFrame(&u8g,68,45,34,13); break; //draw rectangle around this option
+    }
   }
+
+  if(isRunning){
+    u8g_DrawStr(&u8g, 30,54,"Stop");
+  } else {
+    u8g_DrawStr(&u8g, 30,54,"Start");
+  }
+
+  u8g_DrawStr(&u8g, 70,54,"Reset");
 
 
 }
@@ -840,7 +939,7 @@ void getTimeFromDevice(char message[], int len){
   int charIndex = 0;
   int dateIndex = 0;
   int clockLoopIndex = 0;
-     boolean gotDate = false;
+     bool gotDate = false;
      for(int i = 3; i< len;i++){ // i =3 skips first 3 chars
       if(!gotDate){
        if(message[i]==' '){

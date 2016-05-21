@@ -64,6 +64,8 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    - add software turn off
  *    - add hardware power on/off
  *    - add more weatherinfo screen where we can see the forecast for the next days or hours etc
+      - tell the user no messages found on the messages screen
+      - wriet a generic menu function that takes a function as a parameter, the function will write 1 row of data
  */
 
 //input vars
@@ -135,8 +137,8 @@ typedef struct{
 
 //notification vars
 int notificationIndex = 0;
-int PROGMEM notificationMax = 8;
-Notification notifications[8];
+int PROGMEM notificationMax = 10;
+Notification notifications[10];
 
 bool shouldRemove = false;
 
@@ -153,6 +155,8 @@ const int PROGMEM NOTIFICATION_MENU = 1;
 const int PROGMEM NOTIFICATION_BIG = 2;
 const int PROGMEM TIMER = 4;
 const int PROGMEM SETTINGS = 5;
+
+const int PROGMEM ALERT = 6;
 
 //UI constants
 const int PROGMEM MENU_ITEM_HEIGHT = 16;
@@ -180,7 +184,7 @@ int batteryPercentage = 0;
 int timerArray[3] = {0,0,0}; // h/m/s
 bool isRunning = false;
 int timerIndex = 0;
-boolean locked = false;
+bool locked = false;
 
 //connection
 bool isConnected = false;
@@ -188,12 +192,16 @@ int connectedTime = 0;
 
 //settings
 const int numberOfSettings = 2;
-String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget :",""};
+String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget :","Test Setting :"};
 const int PROGMEM settingValueMin[numberOfSettings] = {0,0};
 const int PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,10};
 int settingValue[numberOfSettings] = {0,0}; //default
 bool hasRead = false;
 
+//alert popup
+int lastPage = -1;
+String alertText; //remeber to replace this with a char[] version
+bool alertVibrate = false;
 
 //icons
 const byte PROGMEM BLUETOOTH_CONNECTED[] = {
@@ -313,22 +321,23 @@ void digitalClockWidget(){
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
 
-void settingsPage(){
-  //load settings from eeprom then display
-  //need a data struct for the setting text, and its value
-  //enable editing of these settings
-  if(!hasRead){
-    readSettingsFromEEPROM();
-    hasRead = true;
-  }
-  for(int i=0; i < numberOfSettings + 1;i++){
+void alertPage(){
+  u8g_SetFont(&u8g, u8g_font_6x12);
+  int xOffset = (sizeof(alertText) * 6)/2;
+  u8g_DrawStr(&u8g,64 - xOffset, 32,alertText.c_str());
+  u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
+  //remeber to add vibrate if needed
+}
+
+void showMenu(int numberOfItems,void itemInMenuFunction(int),bool showSelector){
+  for(int i=0; i < numberOfItems + 1;i++){
     int startY = 0;
-    if(i==menuSelector){
+    if(i==menuSelector && showSelector){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
-    if(i!=numberOfSettings){
-      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[i].c_str());
-      u8g_DrawStr(&u8g,x+3 + 110,y+Y_OFFSET+FONT_HEIGHT,String(settingValue[i]).c_str());
+    if(i!=numberOfItems){
+      //u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[i].title);
+        itemInMenuFunction(i);
     } else {
       u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
@@ -336,10 +345,6 @@ void settingsPage(){
     u8g_DrawFrame(&u8g,x,startY,128,y +Y_OFFSET);
   }
   y = 0;
-  /*for(int i=0; i < 2; i++){ // is number of settings
-    u8g_DrawStr(&u8g,0,FONT_HEIGHT,settingKey[i].c_str());
-    u8g_DrawStr(&u8g,115,FONT_HEIGHT,String(settingValue[i]).c_str());
-  }*/
 }
 
 String intTo2Chars(int number){
@@ -358,26 +363,28 @@ void weatherWidget(){
     u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay);
     u8g_DrawStr(&u8g,72,32+FONT_HEIGHT,weatherTemperature);
 
-    bool canFit = true;
-    int lineIndex = 0;
+    int index = 0;
     String twoLines[2];
-    /*for(int i=0; i < weatherForecast.length(); i++){
-      if(weatherForecast.charAt(i) == ' '){
-        canFit = false;
-        lineIndex++;
+    for(int i=0; i < sizeof(weatherForecast); i++){
+      if(weatherForecast[i]==' '){
+        index++;
+        if(index == 3){
+          break;
+        }
       } else {
-        twoLines[lineIndex] += weatherForecast.charAt(i);
+        twoLines[index] += weatherForecast[i];
       }
-    }*/
+    }
 
     u8g_SetFont(&u8g, u8g_font_6x12);
 
-    /*if(canFit){
-      u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,weatherForecast.c_str());
-    } else {
-      u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,twoLines[0].c_str());
-      u8g_DrawStr(&u8g,72,52+FONT_HEIGHT,twoLines[1].c_str());
-    }*/
+  if(index == 0){
+    u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,weatherForecast);
+  } else {
+    u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,twoLines[0].c_str());
+    u8g_DrawStr(&u8g,72,52+FONT_HEIGHT,twoLines[1].c_str());
+  }
+
   } else {
     //print that weather is not available
     u8g_SetFont(&u8g, u8g_font_7x14);
@@ -422,6 +429,9 @@ void updateSystem(){
           } else {
             isRunning = false;
             //todo show a notifcation and vibrate to show timer is done
+            lastPage = pageIndex;
+            alertText = "Timer Finished!";
+            pageIndex = ALERT;
           }
         }
       }
@@ -509,6 +519,7 @@ void handleInput(){
           Serial.println("Time out input");
           prevButtonPressed = 0;
           pageIndex = HOME_PAGE; // take us back to the home page
+          readSettingsFromEEPROM(); // load the settings just to check that they are correct
           widgetSelector = settingValue[0]; //and our fav widget
         }
       }
@@ -516,9 +527,7 @@ void handleInput(){
 }
 
 void handleDualClick(){
-  if(pageIndex = TIMER){
-      //locked = false;
-  }
+    pageIndex = HOME_PAGE;
 }
 
 void handleUpInput(){
@@ -654,9 +663,10 @@ void handleOkInput(){
       isRunning = !isRunning; //start/stop timer
     } else if(timerIndex == 4){
       Serial.println("Resetting timer.");
-        timerArray[0] = 0;
-        timerArray[1] = 0;
-        timerArray[2] = 0;
+      isRunning = false;
+      timerArray[0] = 0;
+      timerArray[1] = 0;
+      timerArray[2] = 0;
     }else {
       locked = !locked; //lock or unlock into a digit so we can manipulate it
     }
@@ -672,6 +682,10 @@ void handleOkInput(){
         saveSettingToEEPROM(menuSelector);
       }
     }
+  } else if(pageIndex == ALERT){
+    //memset(alertText,0,sizeof(alertText)); //reset the alertText
+    alertText = "";
+    pageIndex = lastPage; //go back
   } else {
     Serial.println("Unknown Page.");
   }
@@ -823,6 +837,7 @@ void loop(void) {
       case 2: fullNotification(menuSelector); break;
       case 4: timerApp(); break;
       case 5: settingsPage(); break; //read the newst settings
+      case 6: alertPage(); break;
     }
   } while( u8g_NextPage(&u8g) );
     handleInput();
@@ -909,7 +924,7 @@ void loop(void) {
     Serial.print("Received: ");
     Serial.println(finalData);
     if(startsWith(finalData,"<n>",3)){
-      if(notificationIndex < 7){ // 0-7 == 8
+      if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
         getNotification(finalData,finalDataIndex);
       } else {
         Serial.println("Max notifications Hit.");
@@ -982,21 +997,37 @@ void showNotifications(){
     shouldRemove = false;
     menuSelector = 0;
   }
-  for(int i=0; i < notificationIndex + 1;i++){
-    int startY = 0;
-    if(i==menuSelector){
-        u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
-    }
-    if(i!=notificationIndex){
-      u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[i].title);
-    } else {
-      u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
-    }
-    y += MENU_ITEM_HEIGHT;
-    u8g_DrawFrame(&u8g,x,startY,128,y +Y_OFFSET);
+  if(notificationIndex == 0){
+    u8g_DrawStr(&u8g,30,32,"No Messages.");
   }
-  y = 0;
+  showMenu(notificationIndex, notificationMenuItem,true);
 }
+
+void settingsPage(){
+  //load settings from eeprom then display
+  //need a data struct for the setting text, and its value
+  //enable editing of these settings
+  if(!hasRead){
+    readSettingsFromEEPROM();
+    hasRead = true;
+  }
+  bool showCursor = true;
+  if(locked){
+    showCursor = false;
+  }
+  showMenu(numberOfSettings,settingsMenuItem,showCursor);
+}
+
+void notificationMenuItem(int position){
+  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
+}
+
+void settingsMenuItem(int position){
+  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
+  u8g_DrawStr(&u8g,x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,String(settingValue[position]).c_str());
+}
+
+
 
 void getNotification(char notificationItem[],int len){
   //split the <n>

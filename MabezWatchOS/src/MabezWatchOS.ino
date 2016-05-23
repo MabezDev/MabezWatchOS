@@ -35,6 +35,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(19/05/16)This firmware now only uses char arrays(No more heap fragmentation!) and now can support the detction of multibutton presses
  *  -(19/05/16)New OLED, finished the timer app's basic functionality.
  *  -(20/05/16) Settings page is impemented but need to add the eeprom storage functionality
+ *  -(22/05/16) Added genric function to display a menu, we use a function as a parameter and that function displays one menu item
  *
  *  Buglist:
  *  -if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations
@@ -65,7 +66,15 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    - add hardware power on/off
  *    - add more weatherinfo screen where we can see the forecast for the next days or hours etc
       - tell the user no messages found on the messages screen
-      - wriet a generic menu function that takes a function as a parameter, the function will write 1 row of data
+      - write a generic menu function that takes a function as a parameter, the function will write 1 row of data
+      - Sometime the BT module can get confused (or the OS? or is the app?) and we can't connect till we rest the Watch
+          - Pin 11 (on the HM-11) held low for 100ms will reset the HM-11 Module.
+          - or send AT+RESET to reset it aswell
+      - request data from phone?, tell phone we have read a notification?
+          - App is ready to recieve data from Module, just need to figure what we want
+              - Maybe instead of randomly sending the weather data we coudl request it instead?
+      - Add time stamp for notifications? - (Would NOT need to modify notification structure as we can just use out RTC)
+      - Keep tabs on Weather data to mkae sure its still valid (make sure were not displaying data that is hours old or something)
  */
 
 //input vars
@@ -166,7 +175,9 @@ const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr 
 int pageIndex = 0;
 int menuSelector = 0;
 int widgetSelector = 0;
-int numberOfWidgets = 5; // actually 3, 0,1,2.
+const int numberOfNormalWidgets = 5; // actually 3, 0,1,2.
+const int numberOfDebugWidgets = 1;
+int numberOfWidgets = 0;
 int numberOfPages = 5; // actually 6
 
 const int x = 6;
@@ -192,11 +203,10 @@ int connectedTime = 0;
 
 //settings
 const int numberOfSettings = 2;
-String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget :","Test Setting :"};
+String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget:","Debug Widgets:"};
 const int PROGMEM settingValueMin[numberOfSettings] = {0,0};
-const int PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,10};
+const int PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,1};
 int settingValue[numberOfSettings] = {0,0}; //default
-bool hasRead = false;
 
 //alert popup
 int lastPage = -1;
@@ -208,17 +218,34 @@ const byte PROGMEM BLUETOOTH_CONNECTED[] = {
    0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
 };
 
+int loading = 3; // time the loading screen is show for
+
+const byte PROGMEM LOGO[] = {
+  0x00, 0x00, 0x00, 0x1e, 0x00, 0x0f, 0x3e, 0x80, 0x0f, 0x3e, 0x80, 0x0f,
+   0x7e, 0xc0, 0x0f, 0x6e, 0xc0, 0x0e, 0xee, 0xc0, 0x0e, 0xce, 0x60, 0x0e,
+   0xce, 0x61, 0x0e, 0xce, 0x71, 0x0e, 0x8e, 0x31, 0x0e, 0x8e, 0x3b, 0x0e,
+   0x0e, 0x1b, 0x0e, 0x0e, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e,
+   0x0e, 0x0e, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e,
+   0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x00, 0x00, 0x00
+};
+
 void setup(void) {
   Serial.begin(9600);
   HWSERIAL.begin(9600);
+
   pinMode(OK_BUTTON,INPUT_PULLUP);
   pinMode(DOWN_BUTTON,INPUT_PULLUP);
   pinMode(UP_BUTTON,INPUT_PULLUP);
+
   pinMode(BATT_READ,INPUT);
   pinMode(VIBRATE_PIN,OUTPUT);
+
   RTC.haltRTC(false);
   RTC.writeEN(false);
+
   u8g_prepare();
+
+  readSettingsFromEEPROM(); // load the settings in from EEPROM
 
   messagePtr = &message[0]; // could have used messagePtr = message
 
@@ -228,10 +255,11 @@ void setup(void) {
   analogReadAveraging(32);//smoothing
 
   /*
-   * Could at HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
+   * HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
    */
    HWSERIAL.print("AT");
-   Serial.println("Setup Complete!");
+
+   Serial.println("MabezWatch OS Loaded!");
 }
 
 void u8g_prepare(void) {
@@ -270,6 +298,12 @@ void drawClock(int hour, int minute,int second){
   int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
   u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
 
+  if(settingValue[1] == 1){
+    numberOfWidgets = numberOfNormalWidgets + numberOfDebugWidgets;
+  } else {
+    numberOfWidgets = numberOfNormalWidgets ;
+  }
+
   switch(widgetSelector){
     case 0: timeDateWidget(); break;
     case 1: digitalClockWidget(); break;
@@ -277,6 +311,7 @@ void drawClock(int hour, int minute,int second){
     case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -398,6 +433,7 @@ void updateSystem(){
   long current = millis();
   if(current - prevMillis >= clockUpdateInterval){
     prevMillis = current;
+
     RTC.read(tm);
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
@@ -412,6 +448,10 @@ void updateSystem(){
     //make sure we never display a negative percentage
     if(batteryPercentage < 0){
       batteryPercentage = 0;
+    }
+
+    if(loading!=0){
+      loading--;
     }
 
     if(isRunning){
@@ -429,9 +469,7 @@ void updateSystem(){
           } else {
             isRunning = false;
             //todo show a notifcation and vibrate to show timer is done
-            lastPage = pageIndex;
-            alertText = "Timer Finished!";
-            pageIndex = ALERT;
+            createAlert("Timer Finished!");
           }
         }
       }
@@ -468,6 +506,9 @@ void updateSystem(){
     Serial.print("Free RAM:");
     Serial.println(FreeRam());
     Serial.println("==============================================");
+
+    //send a message to the phone
+    HWSERIAL.print("Testing123");
 
   }
 }
@@ -519,7 +560,6 @@ void handleInput(){
           Serial.println("Time out input");
           prevButtonPressed = 0;
           pageIndex = HOME_PAGE; // take us back to the home page
-          readSettingsFromEEPROM(); // load the settings just to check that they are correct
           widgetSelector = settingValue[0]; //and our fav widget
         }
       }
@@ -642,6 +682,8 @@ void handleOkInput(){
       pageIndex = TIMER;
     } else if(widgetSelector == 5){
       pageIndex = SETTINGS;
+    } else if(widgetSelector == 6){
+        resetBTModule();
     }
     Y_OFFSET = 0;
   } else if(pageIndex == NOTIFICATION_MENU){
@@ -674,7 +716,6 @@ void handleOkInput(){
     if(menuSelector==(numberOfSettings)){ //thisis the back button
       menuSelector = 0;
       pageIndex = HOME_PAGE;
-      hasRead = true; // reset this falg so we read in the newest settings from EEPROM
       //dont reset the widgetIndex to give the illusion we just came from there
     } else {
       locked = !locked;
@@ -784,6 +825,19 @@ void timerApp(){
 
 }
 
+void createAlert(String text){
+  lastPage = pageIndex;
+  alertText = text;
+  pageIndex = ALERT;
+}
+
+void resetBTModule(){
+  HWSERIAL.print("AT"); //disconnect
+  delay(100); //should probably remove this
+  HWSERIAL.print("AT+RESET"); //then reset
+  createAlert("BT Module Reset.");
+}
+
 void removeNotification(int pos){
   if ( pos >= notificationIndex + 1 ){
     Serial.println("Can't delete notification.");
@@ -831,13 +885,18 @@ void fullNotification(int chosenNotification){
 void loop(void) {
   u8g_FirstPage(&u8g);
   do {
-    switch(pageIndex){
-      case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
-      case 1: showNotifications(); break;
-      case 2: fullNotification(menuSelector); break;
-      case 4: timerApp(); break;
-      case 5: settingsPage(); break; //read the newst settings
-      case 6: alertPage(); break;
+    if(loading !=0){
+      u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
+      u8g_DrawStr(&u8g,42,55,"Loading...");
+    } else {
+      switch(pageIndex){
+        case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
+        case 1: showNotifications(); break;
+        case 2: fullNotification(menuSelector); break;
+        case 4: timerApp(); break;
+        case 5: settingsPage(); break; //read the newst settings
+        case 6: alertPage(); break;
+      }
     }
   } while( u8g_NextPage(&u8g) );
     handleInput();
@@ -1007,10 +1066,6 @@ void settingsPage(){
   //load settings from eeprom then display
   //need a data struct for the setting text, and its value
   //enable editing of these settings
-  if(!hasRead){
-    readSettingsFromEEPROM();
-    hasRead = true;
-  }
   bool showCursor = true;
   if(locked){
     showCursor = false;

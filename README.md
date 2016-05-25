@@ -1,5 +1,7 @@
 # MabezWatchOS
 
+This is the firmware the Smart watch I am creating runs on. This code was created for use with A Teensy LC (3.x is also compatible).
+
 ## Notifications
   
   - Receive and break up the serial data into title, text, package name

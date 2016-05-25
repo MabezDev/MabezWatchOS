@@ -38,8 +38,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(22/05/16) Added genric function to display a menu, we use a function as a parameter and that function displays one menu item
  *
  *  Buglist:
- *  -if a program fails to send the <f> tag correctly, we will run out of ram as we have already allocated RAM for notifcations
-    (Solution remove string (Use char[]), only allow max payload size of something) - NEEDS TESTING
+ *  -Weird text artifacting on a full notification, might be to do with not clearing the whole line array
  *
  *  Todo:
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. -TESTED
@@ -75,6 +74,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
               - Maybe instead of randomly sending the weather data we coudl request it instead?
       - Add time stamp for notifications? - (Would NOT need to modify notification structure as we can just use out RTC)
       - Keep tabs on Weather data to mkae sure its still valid (make sure were not displaying data that is hours old or something)
+      - add otion for alert to go away after x amount of seconds?
  */
 
 //input vars
@@ -122,12 +122,13 @@ bool weatherData = false;
 char weatherDay[4];
 char weatherTemperature[4];
 char weatherForecast[25];
+int timeWeGotWeather[2] = {0,0};
 
 
 //time and date constants
 tmElements_t tm;
 time_t t;
-int PROGMEM clockRadius = 32;
+const int PROGMEM clockRadius = 32;
 const int PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
@@ -210,8 +211,9 @@ int settingValue[numberOfSettings] = {0,0}; //default
 
 //alert popup
 int lastPage = -1;
-String alertText; //remeber to replace this with a char[] version
+char alertText[20]; //20 chars that fit
 bool alertVibrate = false;
+int alertTextLen = 0;
 
 //icons
 const byte PROGMEM BLUETOOTH_CONNECTED[] = {
@@ -341,7 +343,7 @@ void timeDateWidget(){
   u8g_DrawStr(&u8g,72,20+14,days[dateArray[3] - 1].c_str());
   u8g_DrawStr(&u8g,72,34+14,intTo2Chars(dateArray[0]).c_str());
   u8g_DrawStr(&u8g,90,34+14,months[dateArray[1] - 1].c_str());
-  u8g_DrawStr(&u8g,72,48+14,String(dateArray[2]).c_str());
+  u8g_DrawStr(&u8g,72,48+14,intTo2Chars(dateArray[2]).c_str());
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
 
@@ -358,8 +360,8 @@ void digitalClockWidget(){
 
 void alertPage(){
   u8g_SetFont(&u8g, u8g_font_6x12);
-  int xOffset = (sizeof(alertText) * 6)/2;
-  u8g_DrawStr(&u8g,64 - xOffset, 32,alertText.c_str());
+  int xOffset = (alertTextLen * 6)/2;
+  u8g_DrawStr(&u8g,64 - xOffset, 32,alertText);
   u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
   //remeber to add vibrate if needed
 }
@@ -396,7 +398,6 @@ void weatherWidget(){
     //change fonts
     u8g_SetFont(&u8g, u8g_font_7x14);
     u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay);
-    u8g_DrawStr(&u8g,72,32+FONT_HEIGHT,weatherTemperature);
 
     int index = 0;
     String twoLines[2];
@@ -411,18 +412,25 @@ void weatherWidget(){
       }
     }
 
+    u8g_SetFont(&u8g, u8g_font_04b_03);
+    String date = intTo2Chars(timeWeGotWeather[0]) + ':' + intTo2Chars(timeWeGotWeather[1]);
+    u8g_DrawStr(&u8g,106,15+ FONT_HEIGHT,date.c_str());
+
     u8g_SetFont(&u8g, u8g_font_6x12);
 
-  if(index == 0){
-    u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,weatherForecast);
-  } else {
-    u8g_DrawStr(&u8g,72,42+FONT_HEIGHT,twoLines[0].c_str());
-    u8g_DrawStr(&u8g,72,52+FONT_HEIGHT,twoLines[1].c_str());
-  }
+    u8g_DrawStr(&u8g,72,28+FONT_HEIGHT,weatherTemperature);
+    u8g_DrawStr(&u8g,106,28+FONT_HEIGHT,"C");
+
+    if(index == 0){
+      u8g_DrawStr(&u8g,72,38+FONT_HEIGHT,weatherForecast);
+    } else {
+      u8g_DrawStr(&u8g,72,38+FONT_HEIGHT,twoLines[0].c_str());
+      u8g_DrawStr(&u8g,72,48+FONT_HEIGHT,twoLines[1].c_str());
+    }
 
   } else {
     //print that weather is not available
-    u8g_SetFont(&u8g, u8g_font_7x14);
+        u8g_SetFont(&u8g, u8g_font_7x14);
     u8g_DrawStr(&u8g,70,34 + 3,"Weather");
     u8g_DrawStr(&u8g,70,50 + 3,"Data N/A");
     u8g_SetFont(&u8g, u8g_font_6x12);
@@ -468,8 +476,7 @@ void updateSystem(){
             timerArray[2] = 59;
           } else {
             isRunning = false;
-            //todo show a notifcation and vibrate to show timer is done
-            createAlert("Timer Finished!");
+            createAlert("Timer Finished!",15);
           }
         }
       }
@@ -501,8 +508,6 @@ void updateSystem(){
     Serial.print("/");
     Serial.println(dateArray[2]);
 
-    // ram should never change as we are never dynamically allocating things
-    //after tests this holes true, with this sketch i have a constant 3800 bytes (ish) for libs and oother stuff
     Serial.print("Free RAM:");
     Serial.println(FreeRam());
     Serial.println("==============================================");
@@ -724,8 +729,8 @@ void handleOkInput(){
       }
     }
   } else if(pageIndex == ALERT){
-    //memset(alertText,0,sizeof(alertText)); //reset the alertText
-    alertText = "";
+    memset(alertText,0,sizeof(alertText)); //reset the alertText
+    alertTextLen = 0; //reset the index
     pageIndex = lastPage; //go back
   } else {
     Serial.println("Unknown Page.");
@@ -794,9 +799,9 @@ void timerApp(){
   u8g_DrawStr(&u8g, 54,23,"M");
   u8g_DrawStr(&u8g, 84,23,"S");
 
-  u8g_DrawStr(&u8g, 24,35,String(timerArray[0]).c_str());
-  u8g_DrawStr(&u8g, 54,35,String(timerArray[1]).c_str());
-  u8g_DrawStr(&u8g, 84,35,String(timerArray[2]).c_str());
+  u8g_DrawStr(&u8g, 24,35,intTo2Chars(timerArray[0]).c_str());
+  u8g_DrawStr(&u8g, 54,35,intTo2Chars(timerArray[1]).c_str());
+  u8g_DrawStr(&u8g, 84,35,intTo2Chars(timerArray[2]).c_str());
 
   if(locked){
     switch (timerIndex) {
@@ -825,17 +830,24 @@ void timerApp(){
 
 }
 
-void createAlert(String text){
-  lastPage = pageIndex;
-  alertText = text;
-  pageIndex = ALERT;
+void createAlert(char text[],int len){
+  if(len < 20){
+    lastPage = pageIndex;
+    alertTextLen = len;
+    for(int i =0; i < len; i++){
+      alertText[i] = text[i];
+    }
+    pageIndex = ALERT;
+  } else {
+    Serial.println("Not Creating Alert, text to big!");
+  }
 }
 
 void resetBTModule(){
   HWSERIAL.print("AT"); //disconnect
-  delay(100); //should probably remove this
+  delay(100); //need else the module won't see the commands as two separate ones
   HWSERIAL.print("AT+RESET"); //then reset
-  createAlert("BT Module Reset.");
+  createAlert("BT Module Reset.",16);
 }
 
 void removeNotification(int pos){
@@ -854,31 +866,29 @@ void removeNotification(int pos){
 
 
 void fullNotification(int chosenNotification){
-  int charsThatFit = 20;
+  static int charsThatFit = 20;
   int charIndex = 0;
   int lines = 0;
 
-  String text = notifications[chosenNotification].text;
+  char lineBuffer[charsThatFit];
 
-  String linesArray[8]; // (150/charsThatFit) = 7.5 = 8
-
-  if(sizeof(notifications[chosenNotification].text) > charsThatFit){
-    for(int i=0; i< 150; i++){
-      if(charIndex > charsThatFit){
-        linesArray[lines] += text.charAt(i);
+  int textLength = sizeof(notifications[chosenNotification].text);
+  if(textLength > charsThatFit){
+    for(int i=0; i < textLength; i++){
+      if(charIndex >= charsThatFit){
+        lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
+        u8g_DrawStr(&u8g,0,lines * 10 + FONT_HEIGHT + Y_OFFSET, lineBuffer); //draw the line
         lines++;
         charIndex = 0;
+        memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
       } else {
-        linesArray[lines] += text.charAt(i);
+        lineBuffer[charIndex] = notifications[chosenNotification].text[i];
         charIndex++;
       }
     }
-    for(int j=0; j < lines + 1; j++){
-      u8g_DrawStr(&u8g,0,j * 10 +FONT_HEIGHT + Y_OFFSET, linesArray[j].c_str());
-    }
-    lineCount = lines;
+    lineCount = (lines - 1);
   } else {
-    u8g_DrawStr(&u8g,0,FONT_HEIGHT,text.c_str());
+    u8g_DrawStr(&u8g,0,FONT_HEIGHT,notifications[chosenNotification].text);
   }
 }
 
@@ -1037,6 +1047,9 @@ void getWeatherData(char weatherItem[],int len){
   Serial.println(weatherTemperature);
   Serial.print("Forecast: ");
   Serial.println(weatherForecast);
+  for(int l=0; l < 2; l++){
+    timeWeGotWeather[l] = clockArray[l];
+  }
   weatherData = true;
 }
 

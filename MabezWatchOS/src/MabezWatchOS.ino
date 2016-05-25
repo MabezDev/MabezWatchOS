@@ -36,9 +36,12 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(19/05/16)New OLED, finished the timer app's basic functionality.
  *  -(20/05/16) Settings page is impemented but need to add the eeprom storage functionality
  *  -(22/05/16) Added genric function to display a menu, we use a function as a parameter and that function displays one menu item
+    -(25/05/16) Code efficency improvements. Again cleaned out all usages of String (except progmem constants), in theory we should never crash from running out of memory
+                - As of this update, we have 815 bytes of RAM, and about 10K of progmem available on Teensy LC
  *
  *  Buglist:
- *  -Weird text artifacting on a full notification, might be to do with not clearing the whole line array
+ *  -Weird text artifacting on a full notification, might be to do with not clearing the whole line array - [FIXED]
+    - intTo2Chars not working for below 10
  *
  *  Todo:
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. -TESTED
@@ -117,6 +120,7 @@ bool receiving = false;
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
 String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+
 //weather vars
 bool weatherData = false;
 char weatherDay[4];
@@ -222,6 +226,13 @@ const byte PROGMEM BLUETOOTH_CONNECTED[] = {
 
 int loading = 3; // time the loading screen is show for
 
+//drawing buffers used for character rendering
+char numberBuffer[2]; //2 numbers
+const int charsThatFit = 20; //only with default font. 0-20 = 21 chars
+char lineBuffer[21]; // 21 chars                             ^^
+int charIndex = 0;
+
+//Logo for loading
 const byte PROGMEM LOGO[] = {
   0x00, 0x00, 0x00, 0x1e, 0x00, 0x0f, 0x3e, 0x80, 0x0f, 0x3e, 0x80, 0x0f,
    0x7e, 0xc0, 0x0f, 0x6e, 0xc0, 0x0e, 0xee, 0xc0, 0x0e, 0xce, 0x60, 0x0e,
@@ -256,12 +267,11 @@ void setup(void) {
   analogReadResolution(10);// 2^10 = 1024
   analogReadAveraging(32);//smoothing
 
-  /*
-   * HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
-   */
-   HWSERIAL.print("AT");
+  //HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
 
-   Serial.println("MabezWatch OS Loaded!");
+  HWSERIAL.print("AT");
+
+  Serial.println("MabezWatch OS Loaded!");
 }
 
 void u8g_prepare(void) {
@@ -269,102 +279,9 @@ void u8g_prepare(void) {
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
 
-void drawClock(int hour, int minute,int second){
-  //need to add am pm thing
-  u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
-  u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
-  u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
-  u8g_DrawStr(&u8g,59-32 + 3,45+ FONT_HEIGHT,"6");
-  u8g_DrawStr(&u8g,7,32 + 3,"9");
-  u8g_DrawStr(&u8g,53,32   + 3,"3");
-
-  if(clockArray[0] > 12){
-    u8g_DrawStr(&u8g,0,64,"PM");
-  } else {
-    u8g_DrawStr(&u8g,0,64,"AM");
-  }
-
-
-  float hours = (((hour * 30) + ((minute/2))) * (PI/180));
-  int x2 = 32 + (sin(hours) * (clockRadius/2));
-  int y2 = 32 - (cos(hours) * (clockRadius/2));
-  u8g_DrawLine(&u8g,32,32,x2,y2); //hour hand
-
-  float minutes = ((minute * 6) * (PI/180));
-  int xx2 = 32 + (sin(minutes) * (clockRadius/1.4));
-  int yy2 = 32 - (cos(minutes) * (clockRadius/1.4));
-  u8g_DrawLine(&u8g,32,32,xx2,yy2);//minute hand
-
-  float seconds = ((second * 6) * (PI/180));
-  int xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
-  int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
-  u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
-
-  if(settingValue[1] == 1){
-    numberOfWidgets = numberOfNormalWidgets + numberOfDebugWidgets;
-  } else {
-    numberOfWidgets = numberOfNormalWidgets ;
-  }
-
-  switch(widgetSelector){
-    case 0: timeDateWidget(); break;
-    case 1: digitalClockWidget(); break;
-    case 2: weatherWidget(); break;
-    case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
-  }
-
-  //status bar - 15 px high for future icon ref
-  u8g_DrawFrame(&u8g,75,0,53,15);
-  //separator line between notifications and bt icon on the status bar
-  u8g_DrawLine(&u8g,116,0,116,14);
-  //batt voltage and connection separator
-  u8g_DrawLine(&u8g,97,0,97,14);
-
-  //notification indicator
-  u8g_DrawStr(&u8g,119,-1 + FONT_HEIGHT,String(notificationIndex).c_str());
-
-  //battery voltage
-  String batt = String(batteryPercentage) + "%";
-  u8g_DrawStr(&u8g,77,11,batt.c_str());
-  //connection icon
-  if(isConnected){
-    u8g_DrawXBMP(&u8g,102,2,8,10,BLUETOOTH_CONNECTED);
-  } else {
-    u8g_DrawStr(&u8g,102,11,"NC");
-  }
-}
-
-void timeDateWidget(){
-  //display date from RTC
-  u8g_SetFont(&u8g, u8g_font_7x14);
-  u8g_DrawStr(&u8g,72,20+14,days[dateArray[3] - 1].c_str());
-  u8g_DrawStr(&u8g,72,34+14,intTo2Chars(dateArray[0]).c_str());
-  u8g_DrawStr(&u8g,90,34+14,months[dateArray[1] - 1].c_str());
-  u8g_DrawStr(&u8g,72,48+14,intTo2Chars(dateArray[2]).c_str());
-  u8g_SetFont(&u8g, u8g_font_6x12);
-}
-
-void digitalClockWidget(){
-  u8g_SetFont(&u8g, u8g_font_7x14);
-  u8g_DrawFrame(&u8g,68,28,60,16);
-  u8g_DrawStr(&u8g,69,28+14,intTo2Chars(clockArray[0]).c_str());
-  u8g_DrawStr(&u8g,83,28+14,":");
-  u8g_DrawStr(&u8g,91,28+14,intTo2Chars(clockArray[1]).c_str());
-  u8g_DrawStr(&u8g,105,28+14,":");
-  u8g_DrawStr(&u8g,113,28+14,intTo2Chars(clockArray[2]).c_str());
-  u8g_SetFont(&u8g, u8g_font_6x12);
-}
-
-void alertPage(){
-  u8g_SetFont(&u8g, u8g_font_6x12);
-  int xOffset = (alertTextLen * 6)/2;
-  u8g_DrawStr(&u8g,64 - xOffset, 32,alertText);
-  u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
-  //remeber to add vibrate if needed
-}
+/*
+* Draw generic menu method
+*/
 
 void showMenu(int numberOfItems,void itemInMenuFunction(int),bool showSelector){
   for(int i=0; i < numberOfItems + 1;i++){
@@ -373,8 +290,7 @@ void showMenu(int numberOfItems,void itemInMenuFunction(int),bool showSelector){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
     if(i!=numberOfItems){
-      //u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[i].title);
-        itemInMenuFunction(i);
+        itemInMenuFunction(i); //draw our custom menuItem
     } else {
       u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
@@ -384,58 +300,9 @@ void showMenu(int numberOfItems,void itemInMenuFunction(int),bool showSelector){
   y = 0;
 }
 
-String intTo2Chars(int number){
-  if(number < 10){
-    return "0" + String(number);
-  } else {
-    return String(number);
-  }
-
-}
-
-void weatherWidget(){
-  if(weatherData){
-    //change fonts
-    u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay);
-
-    int index = 0;
-    String twoLines[2];
-    for(int i=0; i < sizeof(weatherForecast); i++){
-      if(weatherForecast[i]==' '){
-        index++;
-        if(index == 3){
-          break;
-        }
-      } else {
-        twoLines[index] += weatherForecast[i];
-      }
-    }
-
-    u8g_SetFont(&u8g, u8g_font_04b_03);
-    String date = intTo2Chars(timeWeGotWeather[0]) + ':' + intTo2Chars(timeWeGotWeather[1]);
-    u8g_DrawStr(&u8g,106,15+ FONT_HEIGHT,date.c_str());
-
-    u8g_SetFont(&u8g, u8g_font_6x12);
-
-    u8g_DrawStr(&u8g,72,28+FONT_HEIGHT,weatherTemperature);
-    u8g_DrawStr(&u8g,106,28+FONT_HEIGHT,"C");
-
-    if(index == 0){
-      u8g_DrawStr(&u8g,72,38+FONT_HEIGHT,weatherForecast);
-    } else {
-      u8g_DrawStr(&u8g,72,38+FONT_HEIGHT,twoLines[0].c_str());
-      u8g_DrawStr(&u8g,72,48+FONT_HEIGHT,twoLines[1].c_str());
-    }
-
-  } else {
-    //print that weather is not available
-        u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,70,34 + 3,"Weather");
-    u8g_DrawStr(&u8g,70,50 + 3,"Data N/A");
-    u8g_SetFont(&u8g, u8g_font_6x12);
-  }
-}
+/*
+* System tick method
+*/
 
 void updateSystem(){
   long current = millis();
@@ -518,28 +385,390 @@ void updateSystem(){
   }
 }
 
-float getBatteryVoltage(){
-  /*
-   * WARNING: Add voltage divider to bring batt voltage below 3.3v at all times! Do this before pluggin in the Batt or will destroy the Pin in a best case scenario
-   * and will destroy the teensy in a worst case.
-   */
-   float reads = 0;
-   for(int i=0; i<100; i++){
-    reads+= analogRead(BATT_READ);
-   }
-   //change math below to reflect the voltage divider change
-  return (reads/100) * (3.3 / 1024);
+/*
+* Main Loop
+*/
+
+void loop(void) {
+  u8g_FirstPage(&u8g);
+  do {
+    if(loading !=0){
+      u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
+      u8g_DrawStr(&u8g,42,55,"Loading...");
+    } else {
+      switch(pageIndex){
+        case 0: homePage(clockArray[0],clockArray[1],clockArray[2]); break;
+        case 1: notificationMenuPage(); break;
+        case 2: notificationFullPage(menuSelector); break;
+        case 4: timerPage(); break;
+        case 5: settingsPage(); break; //read the newst settings
+        case 6: alertPage(); break;
+      }
+    }
+  } while( u8g_NextPage(&u8g) );
+    handleInput();
+    while(HWSERIAL.available()){
+    message[messageIndex] = char(HWSERIAL.read());//store char from serial command
+    messageIndex++;
+    if(messageIndex >= 99){
+      //this message is too big something went wrong flush the message out the system and break the loop
+      Serial.println("Error message overflow, flushing buffer and discarding message.");
+      messageIndex = 0;
+      memset(message, 0, sizeof(message)); //resetting array
+      HWSERIAL.flush();
+      break;
+    }
+    delay(1);
+  }
+  if(!HWSERIAL.available()){
+    if(messageIndex > 0){
+      Serial.print("Message: ");
+      for(int i=0; i < messageIndex; i++){
+        Serial.print(message[i]);
+      }
+      Serial.println();
+
+
+      if(startsWith(message,"OK",2)){
+          if(startsWith(message,"OK+C",4)){
+            isConnected = true;
+            Serial.println("Connected!");
+          }
+          if(startsWith(message,"OK+L",4)){
+            isConnected = false;
+            Serial.println("Disconnected!");
+            //reset vars like got updated time and weather here also
+          }
+          messageIndex = 0;
+          memset(message, 0, sizeof(message));
+        }
+      if(!receiving && startsWith(message,"<",1)){
+        receiving = true;
+      }else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
+        Serial.println("Message data missing, ignoring.");
+        //we never recieved the end tag of a previous message
+        //reset vars
+        messageIndex = 0;
+        memset(message, 0, sizeof(message));
+        resetTransmissionVariables();
+      }
+      if(!startsWith(message,"<f>",3)){
+        if(startsWith(message,"<i>",3)){
+          // move pointer on to remove out first 3 chars
+          messagePtr += 3;
+          while(*messagePtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
+            finalData[finalDataIndex] = *messagePtr; // *messagePtr derefereces the pointer so it points to the data
+            messagePtr++; // this increased the ptr location in this case by one, if it were an int array it would be by 4 to get the next element
+            finalDataIndex++;
+          }
+          //reset the messagePtr once done
+          messagePtr = message;
+        } else {
+          if(!((finalDataIndex+messageIndex) >= 249)){ //check the data will fit int he char array
+            for(int i=0; i < messageIndex; i++){
+              finalData[finalDataIndex] = message[i];
+              finalDataIndex++;
+            }
+          } else {
+            Serial.println("FinalData is full, but there was more data to add. Discarding data.");
+            messageIndex = 0;
+            memset(message, 0, sizeof(message));
+            resetTransmissionVariables();
+          }
+        }
+      } else {
+        receiving = false;
+        readyToProcess = true;
+      }
+      //reset index
+      messageIndex = 0;
+      memset(message, 0, sizeof(message)); // clears array
+    }
+  }
+
+  if(readyToProcess){
+    Serial.print("Received: ");
+    Serial.println(finalData);
+    if(startsWith(finalData,"<n>",3)){
+      if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
+        getNotification(finalData,finalDataIndex);
+      } else {
+        Serial.println("Max notifications Hit.");
+      }
+    } else if(startsWith(finalData,"<w>",3)){
+      getWeatherData(finalData,finalDataIndex);
+    } else if(startsWith(finalData,"<d>",3)){
+      getTimeFromDevice(finalData,finalDataIndex);
+    }
+    resetTransmissionVariables();
+  }
+  // update the system
+  updateSystem();
 }
 
-void alert(){
-  //buzzes with vibration motor
-  //activates transistor that connects the buzzer with 3.3v
-  // due to the nature of transistors there is 0.7v drop
-  //bringing the voltage to 2.6v - which is safe for the motors
-    digitalWrite(VIBRATE_PIN,HIGH);
-    delay(500);
-    digitalWrite(VIBRATE_PIN,LOW);
+/*
+* Page Methods
+*/
+
+void timerPage(){
+  u8g_DrawStr(&u8g, 24,23,"H");
+  u8g_DrawStr(&u8g, 54,23,"M");
+  u8g_DrawStr(&u8g, 84,23,"S");
+
+  intTo2Chars(timerArray[0]);
+  u8g_DrawStr(&u8g, 24,35,numberBuffer);
+  intTo2Chars(timerArray[1]);
+  u8g_DrawStr(&u8g, 54,35,numberBuffer);
+  intTo2Chars(timerArray[2]);
+  u8g_DrawStr(&u8g, 84,35,numberBuffer);
+
+  if(locked){
+    switch (timerIndex) {
+      case 0: drawTriangle(22,10,8,2); drawTriangle(22,38,8,1); break;
+      case 1: drawTriangle(52,10,8,2); drawTriangle(52,38,8,1); break;
+      case 2: drawTriangle(82,10,8,2); drawTriangle(82,38,8,1); break;
+    }
+  } else {
+    switch (timerIndex) {
+      case 0: drawTriangle(22,8,8,1); break;
+      case 1: drawTriangle(52,8,8,1);break;
+      case 2: drawTriangle(82,8,8,1); break;
+      case 3: u8g_DrawFrame(&u8g,28,45,34,13); break; //draw rectangle around this option
+      case 4: u8g_DrawFrame(&u8g,68,45,34,13); break; //draw rectangle around this option
+    }
+  }
+
+  if(isRunning){
+    u8g_DrawStr(&u8g, 30,54,"Stop");
+  } else {
+    u8g_DrawStr(&u8g, 30,54,"Start");
+  }
+
+  u8g_DrawStr(&u8g, 70,54,"Reset");
+
+
 }
+
+void alertPage(){
+  u8g_SetFont(&u8g, u8g_font_6x12);
+  int xOffset = (alertTextLen * 6)/2;
+  u8g_DrawStr(&u8g,64 - xOffset, 32,alertText);
+  u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
+  //remeber to add vibrate if needed
+}
+
+void notificationMenuPage(){
+  if(shouldRemove){
+    //remove the notification once read
+    removeNotification(menuSelector);
+    shouldRemove = false;
+    menuSelector = 0;
+  }
+  if(notificationIndex == 0){
+    u8g_DrawStr(&u8g,30,32,"No Messages.");
+  }
+  showMenu(notificationIndex, notificationMenuPageItem,true);
+}
+
+void settingsPage(){
+  bool showCursor = true;
+  if(locked){
+    showCursor = false;
+  }
+  showMenu(numberOfSettings,settingsMenuItem,showCursor);
+}
+
+void notificationMenuPageItem(int position){
+  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
+}
+
+void settingsMenuItem(int position){
+  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
+  u8g_DrawStr(&u8g,x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,itoa(settingValue[position],numberBuffer,10));
+}
+
+
+
+void notificationFullPage(int chosenNotification){
+  int lines = 0;
+  charIndex = 0; //make sure we rest index
+
+  int textLength = sizeof(notifications[chosenNotification].text);
+  if(textLength > charsThatFit){
+    for(int i=0; i < textLength; i++){
+      if(charIndex >= charsThatFit){
+        lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
+        u8g_DrawStr(&u8g,0,lines * 10 + FONT_HEIGHT + Y_OFFSET, lineBuffer); //draw the line
+        lines++;
+        charIndex = 0;
+        memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
+      } else {
+        lineBuffer[charIndex] = notifications[chosenNotification].text[i];
+        charIndex++;
+      }
+    }
+    lineCount = (lines - 1);
+  } else {
+    u8g_DrawStr(&u8g,0,FONT_HEIGHT,notifications[chosenNotification].text);
+  }
+}
+
+void homePage(int hour, int minute,int second){
+  //need to add am pm thing
+  u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
+  u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
+  u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
+  u8g_DrawStr(&u8g,59-32 + 3,45+ FONT_HEIGHT,"6");
+  u8g_DrawStr(&u8g,7,32 + 3,"9");
+  u8g_DrawStr(&u8g,53,32   + 3,"3");
+
+  if(clockArray[0] > 12){
+    u8g_DrawStr(&u8g,0,64,"PM");
+  } else {
+    u8g_DrawStr(&u8g,0,64,"AM");
+  }
+
+
+  float hours = (((hour * 30) + ((minute/2))) * (PI/180));
+  int x2 = 32 + (sin(hours) * (clockRadius/2));
+  int y2 = 32 - (cos(hours) * (clockRadius/2));
+  u8g_DrawLine(&u8g,32,32,x2,y2); //hour hand
+
+  float minutes = ((minute * 6) * (PI/180));
+  int xx2 = 32 + (sin(minutes) * (clockRadius/1.4));
+  int yy2 = 32 - (cos(minutes) * (clockRadius/1.4));
+  u8g_DrawLine(&u8g,32,32,xx2,yy2);//minute hand
+
+  float seconds = ((second * 6) * (PI/180));
+  int xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
+  int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
+  u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
+
+  if(settingValue[1] == 1){
+    numberOfWidgets = numberOfNormalWidgets + numberOfDebugWidgets;
+  } else {
+    numberOfWidgets = numberOfNormalWidgets ;
+  }
+
+  switch(widgetSelector){
+    case 0: timeDateWidget(); break;
+    case 1: digitalClockWidget(); break;
+    case 2: weatherWidget(); break;
+    case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
+  }
+
+  //status bar - 15 px high for future icon ref
+  u8g_DrawFrame(&u8g,75,0,53,15);
+  //separator line between notifications and bt icon on the status bar
+  u8g_DrawLine(&u8g,116,0,116,14);
+  //batt voltage and connection separator
+  u8g_DrawLine(&u8g,97,0,97,14);
+
+  //notification indicator
+
+  u8g_DrawStr(&u8g,119,-1 + FONT_HEIGHT,itoa(notificationIndex,numberBuffer,10));
+
+  //battery voltage
+  if(batteryPercentage != 100){
+    u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
+    u8g_DrawStr(&u8g,89,11,"%");
+  } else {
+    //need draw something here to signify we are fully charged
+  }
+
+  //connection icon
+  if(isConnected){
+    u8g_DrawXBMP(&u8g,102,2,8,10,BLUETOOTH_CONNECTED);
+  } else {
+    u8g_DrawStr(&u8g,102,11,"NC");
+  }
+}
+
+/*
+* Home page widgets
+*/
+
+void timeDateWidget(){
+  //display date from RTC
+  u8g_SetFont(&u8g, u8g_font_7x14);
+  u8g_DrawStr(&u8g,72,20+14,days[dateArray[3] - 1].c_str());
+  intTo2Chars(dateArray[0]);
+  u8g_DrawStr(&u8g,72,34+14,numberBuffer);
+  u8g_DrawStr(&u8g,90,34+14,months[dateArray[1] - 1].c_str());
+  intTo2Chars(dateArray[2]);
+  u8g_DrawStr(&u8g,72,48+14,numberBuffer);
+  u8g_SetFont(&u8g, u8g_font_6x12);
+}
+
+void digitalClockWidget(){
+  u8g_SetFont(&u8g, u8g_font_7x14);
+  u8g_DrawFrame(&u8g,68,28,60,16);
+  intTo2Chars(clockArray[0]);
+  u8g_DrawStr(&u8g,69,28+14,numberBuffer);
+  u8g_DrawStr(&u8g,83,28+14,":");
+  intTo2Chars(clockArray[1]);
+  u8g_DrawStr(&u8g,91,28+14,numberBuffer);
+  u8g_DrawStr(&u8g,105,28+14,":");
+  intTo2Chars(clockArray[2]);
+  u8g_DrawStr(&u8g,113,28+14,numberBuffer);
+  u8g_SetFont(&u8g, u8g_font_6x12);
+}
+
+void weatherWidget(){
+  if(weatherData){
+    //change fonts
+    u8g_SetFont(&u8g, u8g_font_7x14);
+    u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay);
+
+    u8g_SetFont(&u8g, u8g_font_04b_03);
+    intTo2Chars(timeWeGotWeather[0]);
+    u8g_DrawStr(&u8g,106,15+ FONT_HEIGHT,numberBuffer);
+    u8g_DrawStr(&u8g,111,15+ FONT_HEIGHT,":");
+    intTo2Chars(timeWeGotWeather[1]);
+    u8g_DrawStr(&u8g,116,15+ FONT_HEIGHT,numberBuffer);
+
+    u8g_SetFont(&u8g, u8g_font_6x12);
+
+    u8g_DrawStr(&u8g,72,28+FONT_HEIGHT,weatherTemperature);
+    u8g_DrawStr(&u8g,106,28+FONT_HEIGHT,"C");
+
+    int index = 0;
+    charIndex = 0;
+    if(contains(weatherForecast,' ',sizeof(weatherForecast))){
+      for(int i=0; i < sizeof(weatherForecast); i++){
+        if(weatherForecast[i]==' ' || weatherForecast[i] == 0){ // == 0  find the end of the data
+          u8g_DrawStr(&u8g,72,(38+FONT_HEIGHT) + (index * 10),lineBuffer);//draw it
+          index++;
+          charIndex = 0; //reset index for next line
+          memset(lineBuffer,0,sizeof(lineBuffer));//reset buffer
+          if(index == 3){ //after 2 lines break
+            break;
+          }
+        } else {
+          lineBuffer[charIndex] = weatherForecast[i]; //fill buffer
+          charIndex++;
+        }
+      }
+    } else {
+      u8g_DrawStr(&u8g,72,38+FONT_HEIGHT,weatherForecast);
+    }
+
+
+  } else {
+    //print that weather is not available
+    u8g_SetFont(&u8g, u8g_font_7x14);
+    u8g_DrawStr(&u8g,70,34 + 3,"Weather");
+    u8g_DrawStr(&u8g,70,50 + 3,"Data N/A");
+    u8g_SetFont(&u8g, u8g_font_6x12);
+  }
+}
+
+/*
+* Input handling methods
+*/
 
 void handleInput(){
   int  vector = getConfirmedInputVector();
@@ -737,18 +966,6 @@ void handleOkInput(){
   }
 }
 
-void saveSettingToEEPROM(int address){
-  if(address < EEPROM.length()){
-    EEPROM.write(address,settingValue[address]);
-  }
-}
-
-void readSettingsFromEEPROM(){
-  for(int i=0; i < numberOfSettings; i++){
-    settingValue[i] = EEPROM.read(i);
-  }
-}
-
 int getConfirmedInputVector()
 {
   static int lastConfirmedVector = 0;
@@ -782,238 +999,9 @@ int getConfirmedInputVector()
   return lastConfirmedVector;
 }
 
-void drawTriangle(int x, int y, int size, int direction){
-  switch (direction) {
-    case 1: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); break; //down
-    case 2: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); break; //up
-    case 3: u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); break; // left
-    case 4: u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); break; // right
-  }
-
-}
-
-
-void timerApp(){
-  // need to a add input for two button presses to get out of this app
-  u8g_DrawStr(&u8g, 24,23,"H");
-  u8g_DrawStr(&u8g, 54,23,"M");
-  u8g_DrawStr(&u8g, 84,23,"S");
-
-  u8g_DrawStr(&u8g, 24,35,intTo2Chars(timerArray[0]).c_str());
-  u8g_DrawStr(&u8g, 54,35,intTo2Chars(timerArray[1]).c_str());
-  u8g_DrawStr(&u8g, 84,35,intTo2Chars(timerArray[2]).c_str());
-
-  if(locked){
-    switch (timerIndex) {
-      case 0: drawTriangle(22,10,8,2); drawTriangle(22,38,8,1); break;
-      case 1: drawTriangle(52,10,8,2); drawTriangle(52,38,8,1); break;
-      case 2: drawTriangle(82,10,8,2); drawTriangle(82,38,8,1); break;
-    }
-  } else {
-    switch (timerIndex) {
-      case 0: drawTriangle(22,8,8,1); break;
-      case 1: drawTriangle(52,8,8,1);break;
-      case 2: drawTriangle(82,8,8,1); break;
-      case 3: u8g_DrawFrame(&u8g,28,45,34,13); break; //draw rectangle around this option
-      case 4: u8g_DrawFrame(&u8g,68,45,34,13); break; //draw rectangle around this option
-    }
-  }
-
-  if(isRunning){
-    u8g_DrawStr(&u8g, 30,54,"Stop");
-  } else {
-    u8g_DrawStr(&u8g, 30,54,"Start");
-  }
-
-  u8g_DrawStr(&u8g, 70,54,"Reset");
-
-
-}
-
-void createAlert(char text[],int len){
-  if(len < 20){
-    lastPage = pageIndex;
-    alertTextLen = len;
-    for(int i =0; i < len; i++){
-      alertText[i] = text[i];
-    }
-    pageIndex = ALERT;
-  } else {
-    Serial.println("Not Creating Alert, text to big!");
-  }
-}
-
-void resetBTModule(){
-  HWSERIAL.print("AT"); //disconnect
-  delay(100); //need else the module won't see the commands as two separate ones
-  HWSERIAL.print("AT+RESET"); //then reset
-  createAlert("BT Module Reset.",16);
-}
-
-void removeNotification(int pos){
-  if ( pos >= notificationIndex + 1 ){
-    Serial.println("Can't delete notification.");
-  } else {
-    for ( int c = pos ; c < (notificationIndex - 1) ; c++ ){
-       notifications[c] = notifications[c+1];
-    }
-    Serial.print("Removed notification at position: ");
-    Serial.println(pos);
-    //lower the index
-    notificationIndex--;
-  }
-}
-
-
-void fullNotification(int chosenNotification){
-  static int charsThatFit = 20;
-  int charIndex = 0;
-  int lines = 0;
-
-  char lineBuffer[charsThatFit];
-
-  int textLength = sizeof(notifications[chosenNotification].text);
-  if(textLength > charsThatFit){
-    for(int i=0; i < textLength; i++){
-      if(charIndex >= charsThatFit){
-        lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
-        u8g_DrawStr(&u8g,0,lines * 10 + FONT_HEIGHT + Y_OFFSET, lineBuffer); //draw the line
-        lines++;
-        charIndex = 0;
-        memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
-      } else {
-        lineBuffer[charIndex] = notifications[chosenNotification].text[i];
-        charIndex++;
-      }
-    }
-    lineCount = (lines - 1);
-  } else {
-    u8g_DrawStr(&u8g,0,FONT_HEIGHT,notifications[chosenNotification].text);
-  }
-}
-
-void loop(void) {
-  u8g_FirstPage(&u8g);
-  do {
-    if(loading !=0){
-      u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
-      u8g_DrawStr(&u8g,42,55,"Loading...");
-    } else {
-      switch(pageIndex){
-        case 0: drawClock(clockArray[0],clockArray[1],clockArray[2]); break;
-        case 1: showNotifications(); break;
-        case 2: fullNotification(menuSelector); break;
-        case 4: timerApp(); break;
-        case 5: settingsPage(); break; //read the newst settings
-        case 6: alertPage(); break;
-      }
-    }
-  } while( u8g_NextPage(&u8g) );
-    handleInput();
-    while(HWSERIAL.available()){
-    message[messageIndex] = char(HWSERIAL.read());//store string from serial command
-    messageIndex++;
-    if(messageIndex >= 99){
-      //this message is too big something went wrong flush the message out the system and break the loop
-      Serial.println("Error message overflow, flushing buffer and discarding message.");
-      messageIndex = 0;
-      memset(message, 0, sizeof(message)); //resetting array
-      HWSERIAL.flush();
-      break;
-    }
-    delay(1);
-  }
-  if(!HWSERIAL.available()){
-    if(messageIndex > 0){
-      Serial.print("Message: ");
-      for(int i=0; i < messageIndex; i++){
-        Serial.print(message[i]);
-      }
-      Serial.println();
-
-
-      if(startsWith(message,"OK",2)){
-          if(startsWith(message,"OK+C",4)){
-            isConnected = true;
-            Serial.println("Connected!");
-          }
-          if(startsWith(message,"OK+L",4)){
-            isConnected = false;
-            Serial.println("Disconnected!");
-            //reset vars like got updated time and weather here also
-          }
-          messageIndex = 0;
-          memset(message, 0, sizeof(message));
-        }
-      if(!receiving && startsWith(message,"<",1)){
-        receiving = true;
-      }else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
-        Serial.println("Message data missing, ignoring.");
-        //we never recieved the end tag of a previous message
-        //reset vars
-        messageIndex = 0;
-        memset(message, 0, sizeof(message));
-        resetTransmissionVariables();
-      }
-      if(!startsWith(message,"<f>",3)){
-        if(startsWith(message,"<i>",3)){
-          // move pointer on to remove out first 3 chars
-          messagePtr += 3;
-          while(*messagePtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
-            finalData[finalDataIndex] = *messagePtr; // *messagePtr derefereces the pointer so it points to the data
-            messagePtr++; // this increased the ptr location in this case by one, if it were an int array it would be by 4 to get the next element
-            finalDataIndex++;
-          }
-          //reset the messagePtr once done
-          messagePtr = message;
-        } else {
-          if(!((finalDataIndex+messageIndex) >= 249)){ //check the data will fit int he char array
-            for(int i=0; i < messageIndex; i++){
-              finalData[finalDataIndex] = message[i];
-              finalDataIndex++;
-            }
-          } else {
-            Serial.println("FinalData is full, but there was more data to add. Discarding data.");
-            messageIndex = 0;
-            memset(message, 0, sizeof(message));
-            resetTransmissionVariables();
-          }
-        }
-      } else {
-        receiving = false;
-        readyToProcess = true;
-      }
-      //reset index
-      messageIndex = 0;
-      memset(message, 0, sizeof(message)); // clears array
-    }
-  }
-
-  if(readyToProcess){
-    Serial.print("Received: ");
-    Serial.println(finalData);
-    if(startsWith(finalData,"<n>",3)){
-      if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
-        getNotification(finalData,finalDataIndex);
-      } else {
-        Serial.println("Max notifications Hit.");
-      }
-    } else if(startsWith(finalData,"<w>",3)){
-      getWeatherData(finalData,finalDataIndex);
-    } else if(startsWith(finalData,"<d>",3)){
-      getTimeFromDevice(finalData,finalDataIndex);
-    }
-    resetTransmissionVariables();
-  }
-  // update the system
-  updateSystem();
-}
-
-void resetTransmissionVariables(){
-  finalDataIndex = 0; //reset final data
-  memset(finalData, 0, sizeof(finalData)); // clears array - (When add this code to the OS we need to add the memsets to the resetTransmission() func)
-  readyToProcess = false;
-}
+/*
+* Data Proccessing methods.
+*/
 
 void getWeatherData(char weatherItem[],int len){
   char *weaPtr = weatherItem;
@@ -1052,50 +1040,6 @@ void getWeatherData(char weatherItem[],int len){
   }
   weatherData = true;
 }
-
-int FreeRam() {
-  char top;
-  #ifdef __arm__
-    return &top - reinterpret_cast<char*>(sbrk(0));
-  #else  // __arm__
-    return __brkval ? &top - __brkval : &top - &__bss_end;
-  #endif  // __arm__
-}
-
-void showNotifications(){
-  if(shouldRemove){
-    //remove the notification once read
-    removeNotification(menuSelector);
-    shouldRemove = false;
-    menuSelector = 0;
-  }
-  if(notificationIndex == 0){
-    u8g_DrawStr(&u8g,30,32,"No Messages.");
-  }
-  showMenu(notificationIndex, notificationMenuItem,true);
-}
-
-void settingsPage(){
-  //load settings from eeprom then display
-  //need a data struct for the setting text, and its value
-  //enable editing of these settings
-  bool showCursor = true;
-  if(locked){
-    showCursor = false;
-  }
-  showMenu(numberOfSettings,settingsMenuItem,showCursor);
-}
-
-void notificationMenuItem(int position){
-  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
-}
-
-void settingsMenuItem(int position){
-  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
-  u8g_DrawStr(&u8g,x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,String(settingValue[position]).c_str());
-}
-
-
 
 void getNotification(char notificationItem[],int len){
   //split the <n>
@@ -1185,21 +1129,46 @@ void getTimeFromDevice(char message[], int len){
 
 }
 
-bool startsWith(char data[], char charSeq[], int len){
-    for(int i=0; i < len; i++){
-      if(!(data[i]==charSeq[i])){
-        return false;
-      }
+/*
+* System methods
+*/
+
+void createAlert(char text[],int len){
+  if(len < 20){
+    lastPage = pageIndex;
+    alertTextLen = len;
+    for(int i =0; i < len; i++){
+      alertText[i] = text[i];
     }
-    return true;
+    pageIndex = ALERT;
+  } else {
+    Serial.println("Not Creating Alert, text to big!");
+  }
 }
 
+void saveSettingToEEPROM(int address){
+  if(address < EEPROM.length()){
+    EEPROM.write(address,settingValue[address]);
+  }
+}
+
+void readSettingsFromEEPROM(){
+  for(int i=0; i < numberOfSettings; i++){
+    settingValue[i] = EEPROM.read(i);
+  }
+}
+
+void drawTriangle(int x, int y, int size, int direction){
+  // some triangle are misshapen need to fix
+  switch (direction) {
+    case 1: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); break; //down
+    case 2: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); break; //up
+    case 3: u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); break; // left
+    case 4: u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); break; // right
+  }
+}
 
 void setClockTime(int hours,int minutes,int seconds, int days, int months, int years){
-
-  Serial.print("Hours: ");
-  Serial.println(hours);
-
   tm.Hour = hours;
   tm.Minute = minutes;
   tm.Second = seconds;
@@ -1215,4 +1184,95 @@ void setClockTime(int hours,int minutes,int seconds, int days, int months, int y
   } else {
     Serial.println(F("Writing to clock failed!"));
   }
+}
+
+void resetBTModule(){
+  HWSERIAL.print("AT"); //disconnect
+  delay(100); //need else the module won't see the commands as two separate ones
+  HWSERIAL.print("AT+RESET"); //then reset
+  createAlert("BT Module Reset.",16);
+}
+
+void resetTransmissionVariables(){
+  finalDataIndex = 0; //reset final data
+  memset(finalData, 0, sizeof(finalData)); // clears array - (When add this code to the OS we need to add the memsets to the resetTransmission() func)
+  readyToProcess = false;
+}
+
+void removeNotification(int pos){
+  if ( pos >= notificationIndex + 1 ){
+    Serial.println("Can't delete notification.");
+  } else {
+    for ( int c = pos ; c < (notificationIndex - 1) ; c++ ){
+       notifications[c] = notifications[c+1];
+    }
+    Serial.print("Removed notification at position: ");
+    Serial.println(pos);
+    //lower the index
+    notificationIndex--;
+  }
+}
+
+float getBatteryVoltage(){
+  /*
+   * WARNING: Add voltage divider to bring batt voltage below 3.3v at all times! Do this before pluggin in the Batt or will destroy the Pin in a best case scenario
+   * and will destroy the teensy in a worst case.
+   */
+   float reads = 0;
+   for(int i=0; i<100; i++){
+    reads+= analogRead(BATT_READ);
+   }
+   //change math below to reflect the voltage divider change
+  return (reads/100) * (3.3 / 1024);
+}
+
+void alert(){
+  //buzzes with vibration motor
+  //activates transistor that connects the buzzer with 3.3v
+  // due to the nature of transistors there is 0.7v drop
+  //bringing the voltage to 2.6v - which is safe for the motors
+    digitalWrite(VIBRATE_PIN,HIGH);
+    delay(500);
+    digitalWrite(VIBRATE_PIN,LOW);
+}
+
+/*
+* Utility methods
+*/
+
+void intTo2Chars(int number){
+  if(number < 10){
+    //not working atm
+    numberBuffer[0] = '0';
+    numberBuffer[1] = number + '0';
+  } else {
+    itoa(number,numberBuffer,10);
+  }
+}
+
+bool startsWith(char data[], char charSeq[], int len){
+    for(int i=0; i < len; i++){
+      if(!(data[i]==charSeq[i])){
+        return false;
+      }
+    }
+    return true;
+}
+
+bool contains(char data[], char character, int lenOfData){
+  for(int i = 0; i < lenOfData; i++){
+    if(data[i] == character){
+      return true;
+    }
+  }
+  return false;
+}
+
+int FreeRam() {
+  char top;
+  #ifdef __arm__
+    return &top - reinterpret_cast<char*>(sbrk(0));
+  #else  // __arm__
+    return __brkval ? &top - __brkval : &top - &__bss_end;
+  #endif  // __arm__
 }

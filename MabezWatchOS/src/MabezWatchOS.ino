@@ -38,31 +38,29 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *  -(22/05/16) Added genric function to display a menu, we use a function as a parameter and that function displays one menu item
     -(25/05/16) Code efficency improvements. Again cleaned out all usages of String (except progmem constants), in theory we should never crash from running out of memory
                 - As of this update, we have 815 bytes of RAM, and about 10K of progmem available on Teensy LC
+    -(25/05/16) Added vibration system methods
+    -(26/05/16) Huge breakthrough, we now tell the app to hold the notifications in a queue till we are ready to read them, this solves all the memory concerns had
  *
  *  Buglist:
- *  -Weird text artifacting on a full notification, might be to do with not clearing the whole line array - [FIXED]
-    - intTo2Chars not working for below 10
+ *
  *
  *  Todo:
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. -TESTED
  *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
- *    -add month and year - DONE
  *    -add reply phrases, if they are short answers like yeah, nah, busy right now etc.
  *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
- *    - [MAJOR] need to completely remove string from this sketch, and use char[] instead - DONE
  *    -text wrapping on the full notification page
- *    -remove all the handle input functions, add one that doies all using the current page to decide what input to use - DONE
  *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - DONE
-          - change the widget to the favorite stored in the settings
- *    - fix the alert function to have two pulses without delay (Fix could be alertcounter set it to 2 then vibrate and -- from alertcounter)
+          - change the widget to the favorite stored in the settings - DONE
+ *    - fix the alert function to have two pulses without delay (Fix could be alertcounter set it to 2 then vibrate and -- from alertcounter) - DONE
  *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side)
- *    - finish timer app (use our system click to time the seconds) - BASIC FUNCTIONALITY COMPLETE
-          - need to alert the suer when the timer is up
+ *    - finish timer app (use our system click to time the seconds) - BASIC FUNCTIONALITY COMPLETE - [TESTED]
+          - need to alert the suer when the timer is up - DONE
           - make it look better
  *    -settings page
-          - favourite widget (will default to once no input is recieved)
- *    -use eeprom to store the settings so we dont have to set them
- *    -the lithium charger board has a two leds one to show chargin one to show chargin done, need to hook into these to read when we are charging(to charge the RTC  batt(trickle charge))
+          - favourite widget (will default to once no input is recieved) - DONE
+ *    -use eeprom to store the settings so we dont have to set them - DONE
+ *    -the lithium charger board has a two leds one to show charging one to show chargin done, need to hook into these to read when we are charging(to charge the RTC  batt(trickle charge))
        and to change the status on the watch to charging etc
  *    - add software turn off
  *    - add hardware power on/off
@@ -75,9 +73,14 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
       - request data from phone?, tell phone we have read a notification?
           - App is ready to recieve data from Module, just need to figure what we want
               - Maybe instead of randomly sending the weather data we coudl request it instead?
-      - Add time stamp for notifications? - (Would NOT need to modify notification structure as we can just use out RTC)
+                  -request 5 day forecast?
+              - request phone battery level
+              -  we could tell the phone we have ran out of mem, so keep the rest of the notifications in the queue till there is space [DONE]
+      - Add time stamp for notifications? - (Would need to modify notification structure but we dont need any data from the phone use out RTC), we have space due to the 15 char limit on the titles
       - Keep tabs on Weather data to mkae sure its still valid (make sure were not displaying data that is hours old or something)
       - add otion for alert to go away after x amount of seconds?
+      - F() all strings
+      - store tags like <i> as progmem constants for better readablity
  */
 
 //input vars
@@ -107,13 +110,11 @@ int lastVector = 0;
 long prevButtonPressed = 0;
 
 //serial retrieval vars
-//serial retrieval vars
-char message[100];
+char message[100]; // serial read buffer
 char *messagePtr; //this could be local to the receiving loop
-char finalData[250];
+char finalData[250];//data set buffer
 int finalDataIndex = 0; //index is required as we dunno when we stop
 int messageIndex = 0;
-//int chunkCount = 0;
 bool readyToProcess = false;
 bool receiving = false;
 
@@ -153,6 +154,7 @@ typedef struct{
 int notificationIndex = 0;
 int PROGMEM notificationMax = 10;
 Notification notifications[10];
+bool wantNotifications = true;
 
 bool shouldRemove = false;
 
@@ -162,6 +164,7 @@ const int PROGMEM DOWN_BUTTON = 5;
 const int PROGMEM UP_BUTTON = 3;
 const int PROGMEM BATT_READ = A6;
 const int PROGMEM VIBRATE_PIN = 10;
+const int PROGMEM CHARGING_STATUS_PIN = 9;
 
 //navigation constants
 const int PROGMEM HOME_PAGE = 0;
@@ -183,7 +186,7 @@ int widgetSelector = 0;
 const int numberOfNormalWidgets = 5; // actually 3, 0,1,2.
 const int numberOfDebugWidgets = 1;
 int numberOfWidgets = 0;
-int numberOfPages = 5; // actually 6
+int numberOfPages = 5; // actually 6 (0-5 = 6)
 
 const int x = 6;
 int y = 0;
@@ -195,6 +198,7 @@ int currentLine = 0;
 //batt monitoring
 float batteryVoltage = 0;
 int batteryPercentage = 0;
+bool isCharging = false;
 
 //timer variables
 int timerArray[3] = {0,0,0}; // h/m/s
@@ -216,8 +220,10 @@ int settingValue[numberOfSettings] = {0,0}; //default
 //alert popup
 int lastPage = -1;
 char alertText[20]; //20 chars that fit
-bool alertVibrate = false;
 int alertTextLen = 0;
+int alertVibrationCount = 0;
+bool vibrating = false;
+long prevAlertMillis = 0;
 
 //icons
 const byte PROGMEM BLUETOOTH_CONNECTED[] = {
@@ -242,6 +248,11 @@ const byte PROGMEM LOGO[] = {
    0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x00, 0x00, 0x00
 };
 
+const byte PROGMEM CHARGING[] = {
+  0x00, 0x00, 0x00, 0x00, 0xf0, 0x03, 0x10, 0x02, 0x18, 0x1e, 0x1e, 0x02,
+   0x1e, 0x02, 0x18, 0x1e, 0x10, 0x02, 0xf0, 0x03, 0x00, 0x00, 0x00, 0x00
+};
+
 void setup(void) {
   Serial.begin(9600);
   HWSERIAL.begin(9600);
@@ -251,6 +262,7 @@ void setup(void) {
   pinMode(UP_BUTTON,INPUT_PULLUP);
 
   pinMode(BATT_READ,INPUT);
+  pinMode(CHARGING_STATUS_PIN,INPUT_PULLUP); //INPUT_PULLUP  used as were only ready if we are charing or not
   pinMode(VIBRATE_PIN,OUTPUT);
 
   RTC.haltRTC(false);
@@ -271,7 +283,7 @@ void setup(void) {
 
   HWSERIAL.print("AT");
 
-  Serial.println("MabezWatch OS Loaded!");
+  Serial.println(F("MabezWatch OS Loaded!"));
 }
 
 void u8g_prepare(void) {
@@ -305,10 +317,11 @@ void showMenu(int numberOfItems,void itemInMenuFunction(int),bool showSelector){
 */
 
 void updateSystem(){
-  long current = millis();
-  if(current - prevMillis >= clockUpdateInterval){
-    prevMillis = current;
+  long currentInterval = millis();
+  if((currentInterval - prevMillis) >= clockUpdateInterval){
+    prevMillis = currentInterval;
 
+    //update RTC info
     RTC.read(tm);
     clockArray[0] = tm.Hour;
     clockArray[1] = tm.Minute;
@@ -317,12 +330,21 @@ void updateSystem(){
     dateArray[1] = tm.Month;
     dateArray[2] = tmYearToCalendar(tm.Year);
     dateArray[3]  = tm.Wday;
+
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
-    batteryPercentage = ((batteryVoltage - 3)/1.2)*100;
+    batteryPercentage = ((batteryVoltage - 3)/1.2)*100; // not accurate but should be enough
+    isCharging = !digitalRead(CHARGING_STATUS_PIN); //invert because pull up
+
     //make sure we never display a negative percentage
     if(batteryPercentage < 0){
       batteryPercentage = 0;
+    }
+
+    if(notificationIndex < (notificationMax - 4) && !wantNotifications){
+      Serial.println("WE WANT NOTIFICATION AGAIN!");
+      HWSERIAL.print("<n>");
+      wantNotifications = true;
     }
 
     if(loading!=0){
@@ -343,45 +365,58 @@ void updateSystem(){
             timerArray[2] = 59;
           } else {
             isRunning = false;
-            createAlert("Timer Finished!",15);
+            createAlert("Timer Finished!",15,5);
           }
         }
       }
     }
 
-    Serial.println("==============================================");
+    Serial.println(F("=============================================="));
     if(isConnected){
       connectedTime++;
-      Serial.print("Connected for ");
+      Serial.print(F("Connected for "));
       Serial.print(connectedTime);
-      Serial.println(" seconds.");
+      Serial.println(F(" seconds."));
     } else {
-      Serial.print("Connected Status: ");
+      Serial.print(F("Connected Status: "));
       Serial.println(isConnected);
       connectedTime = 0;
     }
-    Serial.print("Number of Notifications: ");
+    Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
-    Serial.print("Time: ");
+    Serial.print(F("Time: "));
     Serial.print(clockArray[0]);
-    Serial.print(":");
+    Serial.print(F(":"));
     Serial.print(clockArray[1]);
-    Serial.print(":");
+    Serial.print(F(":"));
     Serial.print(clockArray[2]);
-    Serial.print("    Date: ");
+    Serial.print(F("    Date: "));
     Serial.print(dateArray[0]);
-    Serial.print("/");
+    Serial.print(F("/"));
     Serial.print(dateArray[1]);
-    Serial.print("/");
+    Serial.print(F("/"));
     Serial.println(dateArray[2]);
 
-    Serial.print("Free RAM:");
+    Serial.print(F("Free RAM:"));
     Serial.println(FreeRam());
-    Serial.println("==============================================");
+    Serial.println(F("=============================================="));
 
-    //send a message to the phone
-    HWSERIAL.print("Testing123");
+    //send a message to the phone about asking for the weather
+    //HWSERIAL.print("TEST");
 
+  }
+  if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
+    prevAlertMillis = currentInterval;
+    vibrating = !vibrating;
+    alertVibrationCount--;
+    if(vibrating){
+      digitalWrite(VIBRATE_PIN, HIGH);
+    } else {
+      digitalWrite(VIBRATE_PIN, LOW);
+    }
+    if(alertVibrationCount == 0 && vibrating){ //make we don't leave it vibrating
+      vibrating = false;
+    }
   }
 }
 
@@ -412,7 +447,7 @@ void loop(void) {
     messageIndex++;
     if(messageIndex >= 99){
       //this message is too big something went wrong flush the message out the system and break the loop
-      Serial.println("Error message overflow, flushing buffer and discarding message.");
+      Serial.println(F("Error message overflow, flushing buffer and discarding message."));
       messageIndex = 0;
       memset(message, 0, sizeof(message)); //resetting array
       HWSERIAL.flush();
@@ -422,7 +457,7 @@ void loop(void) {
   }
   if(!HWSERIAL.available()){
     if(messageIndex > 0){
-      Serial.print("Message: ");
+      Serial.print(F("Message: "));
       for(int i=0; i < messageIndex; i++){
         Serial.print(message[i]);
       }
@@ -432,12 +467,15 @@ void loop(void) {
       if(startsWith(message,"OK",2)){
           if(startsWith(message,"OK+C",4)){
             isConnected = true;
-            Serial.println("Connected!");
-          }
-          if(startsWith(message,"OK+L",4)){
+            Serial.println(F("Connected!"));
+          } else if(startsWith(message,"OK+L",4)){
             isConnected = false;
-            Serial.println("Disconnected!");
+            Serial.println(F("Disconnected!"));
             //reset vars like got updated time and weather here also
+          } else {
+            //the message was broken and we have no way of knowing if we connected or not so just send the disconnect and try again manually
+            Serial.println(F("Error connecting, retry."));
+            HWSERIAL.print("AT");
           }
           messageIndex = 0;
           memset(message, 0, sizeof(message));
@@ -445,7 +483,7 @@ void loop(void) {
       if(!receiving && startsWith(message,"<",1)){
         receiving = true;
       }else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
-        Serial.println("Message data missing, ignoring.");
+        Serial.println(F("Message data missing, ignoring."));
         //we never recieved the end tag of a previous message
         //reset vars
         messageIndex = 0;
@@ -470,7 +508,7 @@ void loop(void) {
               finalDataIndex++;
             }
           } else {
-            Serial.println("FinalData is full, but there was more data to add. Discarding data.");
+            Serial.println(F("FinalData is full, but there was more data to add. Discarding data."));
             messageIndex = 0;
             memset(message, 0, sizeof(message));
             resetTransmissionVariables();
@@ -487,13 +525,18 @@ void loop(void) {
   }
 
   if(readyToProcess){
-    Serial.print("Received: ");
+    Serial.print(F("Received: "));
     Serial.println(finalData);
     if(startsWith(finalData,"<n>",3)){
       if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
         getNotification(finalData,finalDataIndex);
+        vibrate(2); //vibrate
+        if(notificationIndex > (notificationMax - 2)){ //tell the app we are out of space and hold the notifications
+          HWSERIAL.print("<e>");
+          wantNotifications = false;
+        }
       } else {
-        Serial.println("Max notifications Hit.");
+        Serial.println(F("Max notifications Hit."));
       }
     } else if(startsWith(finalData,"<w>",3)){
       getWeatherData(finalData,finalDataIndex);
@@ -562,7 +605,7 @@ void notificationMenuPage(){
     //remove the notification once read
     removeNotification(menuSelector);
     shouldRemove = false;
-    menuSelector = 0;
+    //menuSelector = 0; //dont put it back to zero as when new message com in the order will get screwed
   }
   if(notificationIndex == 0){
     u8g_DrawStr(&u8g,30,32,"No Messages.");
@@ -647,7 +690,7 @@ void homePage(int hour, int minute,int second){
   if(settingValue[1] == 1){
     numberOfWidgets = numberOfNormalWidgets + numberOfDebugWidgets;
   } else {
-    numberOfWidgets = numberOfNormalWidgets ;
+    numberOfWidgets = numberOfNormalWidgets;
   }
 
   switch(widgetSelector){
@@ -672,11 +715,17 @@ void homePage(int hour, int minute,int second){
   u8g_DrawStr(&u8g,119,-1 + FONT_HEIGHT,itoa(notificationIndex,numberBuffer,10));
 
   //battery voltage
-  if(batteryPercentage != 100){
-    u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
-    u8g_DrawStr(&u8g,89,11,"%");
+  if(!isCharging){
+    if(batteryPercentage != 100){
+      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
+      u8g_DrawStr(&u8g,89,11,"%");
+    } else {
+      //need draw something here to signify we are fully charged
+      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10)); //atm we are just drawing without the percentage
+    }
   } else {
-    //need draw something here to signify we are fully charged
+    //draw symbol to show that we are charging here
+    u8g_DrawXBMP(&u8g,80,2,14,12,CHARGING);
   }
 
   //connection icon
@@ -774,7 +823,7 @@ void handleInput(){
   int  vector = getConfirmedInputVector();
     if(vector!=lastVector){
       if (vector == UP_DOWN){
-        Serial.println("Dual click detected!");
+        Serial.println(F("Dual click detected!"));
         handleDualClick();
       } else if (vector == UP_ONLY){
         handleUpInput();
@@ -783,7 +832,7 @@ void handleInput(){
       } else if(vector == OK_ONLY){
         handleOkInput();
       } else if(vector == ALL_THREE){
-        Serial.println("Return to menu Combo");
+        Serial.println(F("Return to menu Combo"));
         pageIndex = HOME_PAGE; // take us back to the home page
         widgetSelector = settingValue[0];// and our fav widget
       }
@@ -791,7 +840,7 @@ void handleInput(){
     }
       if(vector == NONE_OF_THEM){
         if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
-          Serial.println("Time out input");
+          Serial.println(F("Time out input"));
           prevButtonPressed = 0;
           pageIndex = HOME_PAGE; // take us back to the home page
           widgetSelector = settingValue[0]; //and our fav widget
@@ -805,7 +854,7 @@ void handleDualClick(){
 }
 
 void handleUpInput(){
-  Serial.println("Up Click Detected");
+  Serial.println(F("Up Click Detected"));
   if(pageIndex == HOME_PAGE){
     widgetSelector++;
     if(widgetSelector > numberOfWidgets){
@@ -839,7 +888,7 @@ void handleUpInput(){
       menuUp(numberOfSettings);
     }
   } else {
-    Serial.println("Unknown Page.");
+    Serial.println(F("Unknown Page."));
   }
 }
 
@@ -851,6 +900,7 @@ void menuUp(int size){
     Y_OFFSET -= MENU_ITEM_HEIGHT;
   }
   if(menuSelector >= size){
+     //menuSelector = 0;
      menuSelector = size;
   }
 }
@@ -859,6 +909,7 @@ void menuDown(){
   menuSelector--;
   if(menuSelector < 0){
      menuSelector = 0;
+     //menuSelector = notificationIndex + 1;
   }
   //plus y
   if((menuSelector >= 3)){
@@ -867,7 +918,7 @@ void menuDown(){
 }
 
 void handleDownInput(){
-  Serial.println("Down Click Detected");
+  Serial.println(F("Down Click Detected"));
   if(pageIndex == HOME_PAGE){
     widgetSelector--;
     if(widgetSelector < 0){
@@ -903,12 +954,12 @@ void handleDownInput(){
       menuDown();
     }
   } else {
-    Serial.println("Unknown Page.");
+    Serial.println(F("Unknown Page."));
   }
 }
 
 void handleOkInput(){
-  Serial.println("OK Click Detected");
+  Serial.println(F("OK Click Detected"));
   if(pageIndex == HOME_PAGE){
     if(widgetSelector == 3){
       pageIndex = NOTIFICATION_MENU;
@@ -922,15 +973,19 @@ void handleOkInput(){
     Y_OFFSET = 0;
   } else if(pageIndex == NOTIFICATION_MENU){
     if(menuSelector != notificationIndex){//last one is the back item
+      Y_OFFSET = 0;
       pageIndex = NOTIFICATION_BIG;
     } else {
-      //remove the notification
-      menuSelector = 0;//rest the selector
+      menuSelector = 0; //reset the selector
       pageIndex = HOME_PAGE;// go back to list of notifications
     }
   } else if(pageIndex == NOTIFICATION_BIG){
     shouldRemove = true;
-    Y_OFFSET = 0;
+    if(menuSelector > 3){
+      Y_OFFSET = -1* (menuSelector - 3) * MENU_ITEM_HEIGHT; //return to place
+    } else {
+      Y_OFFSET = 0;
+    }
     lineCount = 0;//reset number of lines
     currentLine = 0;// reset currentLine back to zero
     pageIndex = NOTIFICATION_MENU;
@@ -938,7 +993,7 @@ void handleOkInput(){
     if(timerIndex==3){
       isRunning = !isRunning; //start/stop timer
     } else if(timerIndex == 4){
-      Serial.println("Resetting timer.");
+      Serial.println(F("Resetting timer."));
       isRunning = false;
       timerArray[0] = 0;
       timerArray[1] = 0;
@@ -962,7 +1017,7 @@ void handleOkInput(){
     alertTextLen = 0; //reset the index
     pageIndex = lastPage; //go back
   } else {
-    Serial.println("Unknown Page.");
+    Serial.println(F("Unknown Page."));
   }
 }
 
@@ -1029,11 +1084,11 @@ void getWeatherData(char weatherItem[],int len){
     }
     weaPtr++; //move pointer along
   }
-  Serial.print("Day: ");
+  Serial.print(F("Day: "));
   Serial.println(weatherDay);
-  Serial.print("Temperature: ");
+  Serial.print(F("Temperature: "));
   Serial.println(weatherTemperature);
-  Serial.print("Forecast: ");
+  Serial.print(F("Forecast: "));
   Serial.println(weatherForecast);
   for(int l=0; l < 2; l++){
     timeWeGotWeather[l] = clockArray[l];
@@ -1068,9 +1123,9 @@ void getNotification(char notificationItem[],int len){
     }
     notPtr++; //move along
   }
-  Serial.print("Notification title: ");
+  Serial.print(F("Notification title: "));
   Serial.println(notifications[notificationIndex].title);
-  Serial.print("Notification text: ");
+  Serial.print(F("Notification text: "));
   Serial.println(notifications[notificationIndex].text);
   notificationIndex++;
 }
@@ -1080,7 +1135,7 @@ void getNotification(char notificationItem[],int len){
 void getTimeFromDevice(char message[], int len){
   //sample data
   //<d>24 04 2016 17:44:46
-  Serial.print("Date data: ");
+  Serial.print(F("Date data: "));
   Serial.println(message);
   char buf[4];//max 2 chars
   int charIndex = 0;
@@ -1133,17 +1188,22 @@ void getTimeFromDevice(char message[], int len){
 * System methods
 */
 
-void createAlert(char text[],int len){
+void createAlert(char text[],int len, int vibrationTime){
   if(len < 20){
     lastPage = pageIndex;
     alertTextLen = len;
     for(int i =0; i < len; i++){
       alertText[i] = text[i];
     }
+    vibrate(vibrationTime);
     pageIndex = ALERT;
   } else {
-    Serial.println("Not Creating Alert, text to big!");
+    Serial.println(F("Not Creating Alert, text to big!"));
   }
+}
+
+void vibrate(int vibrationTime){
+  alertVibrationCount = (vibrationTime) * 2;
 }
 
 void saveSettingToEEPROM(int address){
@@ -1190,7 +1250,7 @@ void resetBTModule(){
   HWSERIAL.print("AT"); //disconnect
   delay(100); //need else the module won't see the commands as two separate ones
   HWSERIAL.print("AT+RESET"); //then reset
-  createAlert("BT Module Reset.",16);
+  createAlert("BT Module Reset.",16,0);
 }
 
 void resetTransmissionVariables(){
@@ -1201,12 +1261,12 @@ void resetTransmissionVariables(){
 
 void removeNotification(int pos){
   if ( pos >= notificationIndex + 1 ){
-    Serial.println("Can't delete notification.");
+    Serial.println(F("Can't delete notification."));
   } else {
     for ( int c = pos ; c < (notificationIndex - 1) ; c++ ){
        notifications[c] = notifications[c+1];
     }
-    Serial.print("Removed notification at position: ");
+    Serial.print(F("Removed notification at position: "));
     Serial.println(pos);
     //lower the index
     notificationIndex--;

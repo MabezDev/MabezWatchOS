@@ -3,7 +3,7 @@
 #include <u8g_i2c.h>
 #include <i2c_t3.h>
 #include <Time.h>
-#include <DS1302RTC.h>
+#include <DS1307RTC.h> //this works with out clock (DS3231)
 #include <EEPROM.h>
 #define HWSERIAL Serial1
 
@@ -18,11 +18,11 @@
 //u8g lib object without the c++ wrapper due to lack of support of the OLED
 u8g_t u8g;
 
-//RTC object
-DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
-
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm.
+
+   Currently with no power saving techniques the whole thing runs on just 28millisamps, therfore
+        240 mah battery / 28ma current draw = 8.5 hours of on time
  *
  * Update:
  *  -(04/04/16)UI Improved vastly.
@@ -39,7 +39,8 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
     -(25/05/16) Code efficency improvements. Again cleaned out all usages of String (except progmem constants), in theory we should never crash from running out of memory
                 - As of this update, we have 815 bytes of RAM, and about 10K of progmem available on Teensy LC
     -(25/05/16) Added vibration system methods
-    -(26/05/16) Huge breakthrough, we now tell the app to hold the notifications in a queue till we are ready to read them, this solves all the memory concerns had
+    -(26/05/16) [MAJOR] We now tell the app to hold the notifications in a queue till we are ready to read them, this solves all the memory concerns had
+    -(26/05/16) Switched from DS1302 RTC to smaller, better DS3231
  *
  *  Buglist:
  *
@@ -52,7 +53,7 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
  *    -text wrapping on the full notification page
  *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - DONE
           - change the widget to the favorite stored in the settings - DONE
- *    - fix the alert function to have two pulses without delay (Fix could be alertcounter set it to 2 then vibrate and -- from alertcounter) - DONE
+ *    - fix the alert function to have two pulses without delay (Fix could be aleRTCounter set it to 2 then vibrate and -- from aleRTCounter) - DONE
  *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side)
  *    - finish timer app (use our system click to time the seconds) - BASIC FUNCTIONALITY COMPLETE - [TESTED]
           - need to alert the suer when the timer is up - DONE
@@ -79,8 +80,11 @@ DS1302RTC RTC(12,11,13);// 12 is reset/chip select, 11 is data, 13 is clock
       - Add time stamp for notifications? - (Would need to modify notification structure but we dont need any data from the phone use out RTC), we have space due to the 15 char limit on the titles
       - Keep tabs on Weather data to mkae sure its still valid (make sure were not displaying data that is hours old or something)
       - add otion for alert to go away after x amount of seconds?
-      - F() all strings
+      - F() all strings - [DONE] (But makes no difference on ARM based MC's)
       - store tags like <i> as progmem constants for better readablity
+      - Switch to DS3231 RTC - [DONE]  but we need to implement our methods to get temperature, and set alarms by translating code from another lib
+          - Use the alarm functionality of this module to create an alarm page( only 2 alarms though I Believe)
+          - We can also get the temperature outside with it
  */
 
 //input vars
@@ -148,6 +152,7 @@ typedef struct{
   char packageName[15];
   char title[15];
   char text[150];
+  int dateReceived[2];
 } Notification;
 
 //notification vars
@@ -265,8 +270,8 @@ void setup(void) {
   pinMode(CHARGING_STATUS_PIN,INPUT_PULLUP); //INPUT_PULLUP  used as were only ready if we are charing or not
   pinMode(VIBRATE_PIN,OUTPUT);
 
-  RTC.haltRTC(false);
-  RTC.writeEN(false);
+  //RTC.haltRTC(false);
+  //RTC.writeEN(false);
 
   u8g_prepare();
 
@@ -330,6 +335,7 @@ void updateSystem(){
     dateArray[1] = tm.Month;
     dateArray[2] = tmYearToCalendar(tm.Year);
     dateArray[3]  = tm.Wday;
+
 
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
@@ -622,7 +628,18 @@ void settingsPage(){
 }
 
 void notificationMenuPageItem(int position){
+  //draw title
   u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
+
+  u8g_SetFont(&u8g, u8g_font_04b_03);
+  { //draw timestamp
+    intTo2Chars(notifications[position].dateReceived[0]);
+    u8g_DrawStr(&u8g,x+95,y + Y_OFFSET + FONT_HEIGHT,numberBuffer);
+    u8g_DrawStr(&u8g,x+103,y + Y_OFFSET + FONT_HEIGHT,":");
+    intTo2Chars(notifications[position].dateReceived[1]);
+    u8g_DrawStr(&u8g,x+106,y + Y_OFFSET + FONT_HEIGHT,numberBuffer);
+  }
+  u8g_SetFont(&u8g, u8g_font_6x12);
 }
 
 void settingsMenuItem(int position){
@@ -774,15 +791,15 @@ void weatherWidget(){
 
     u8g_SetFont(&u8g, u8g_font_04b_03);
     intTo2Chars(timeWeGotWeather[0]);
-    u8g_DrawStr(&u8g,106,15+ FONT_HEIGHT,numberBuffer);
-    u8g_DrawStr(&u8g,111,15+ FONT_HEIGHT,":");
+    u8g_DrawStr(&u8g,105,15+ FONT_HEIGHT,numberBuffer);
+    u8g_DrawStr(&u8g,113,15+ FONT_HEIGHT,":");
     intTo2Chars(timeWeGotWeather[1]);
     u8g_DrawStr(&u8g,116,15+ FONT_HEIGHT,numberBuffer);
 
     u8g_SetFont(&u8g, u8g_font_6x12);
 
     u8g_DrawStr(&u8g,72,28+FONT_HEIGHT,weatherTemperature);
-    u8g_DrawStr(&u8g,106,28+FONT_HEIGHT,"C");
+    u8g_DrawStr(&u8g,102,28+FONT_HEIGHT,"C");
 
     int index = 0;
     charIndex = 0;
@@ -1123,6 +1140,10 @@ void getNotification(char notificationItem[],int len){
     }
     notPtr++; //move along
   }
+  //finally get the timestamp of whenwe recieved the notification
+  notifications[notificationIndex].dateReceived[0] = clockArray[0];
+  notifications[notificationIndex].dateReceived[1] = clockArray[1];
+
   Serial.print(F("Notification title: "));
   Serial.println(notifications[notificationIndex].title);
   Serial.print(F("Notification text: "));
@@ -1237,6 +1258,7 @@ void setClockTime(int hours,int minutes,int seconds, int days, int months, int y
   //This is correct
   tm.Year = CalendarYrToTm(years);
   t = makeTime(tm);
+
   if(RTC.set(t) == 0) { // Success
     setTime(t);
     Serial.println(F("Writing time to RTC was successfull!"));
@@ -1244,6 +1266,8 @@ void setClockTime(int hours,int minutes,int seconds, int days, int months, int y
   } else {
     Serial.println(F("Writing to clock failed!"));
   }
+
+
 }
 
 void resetBTModule(){
@@ -1263,6 +1287,9 @@ void removeNotification(int pos){
   if ( pos >= notificationIndex + 1 ){
     Serial.println(F("Can't delete notification."));
   } else {
+    memset(notifications[pos].text,0,sizeof(notifications[pos].text));
+    memset(notifications[pos].title,0,sizeof(notifications[pos].title));
+    memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
     for ( int c = pos ; c < (notificationIndex - 1) ; c++ ){
        notifications[c] = notifications[c+1];
     }

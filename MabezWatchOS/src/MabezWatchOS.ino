@@ -2,8 +2,7 @@
 
 #include <u8g_i2c.h>
 #include <i2c_t3.h>
-#include <Time.h>
-#include <DS1307RTC.h> //this works with out clock (DS3231)
+#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
 #include <EEPROM.h>
 #define HWSERIAL Serial1
 
@@ -121,10 +120,12 @@ int finalDataIndex = 0; //index is required as we dunno when we stop
 int messageIndex = 0;
 bool readyToProcess = false;
 bool receiving = false;
+bool checkingTag = false;
+char messageBuffer[3];
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+String PROGMEM days[7] = {"Sunday`","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 
 //weather vars
 bool weatherData = false;
@@ -289,6 +290,8 @@ void setup(void) {
   HWSERIAL.print("AT");
 
   Serial.println(F("MabezWatch OS Loaded!"));
+
+  //setAlarm(50,2,28);
 }
 
 void u8g_prepare(void) {
@@ -388,6 +391,11 @@ void updateSystem(){
       Serial.println(isConnected);
       connectedTime = 0;
     }
+
+    Serial.print("Battery Level: ");
+    Serial.print(batteryPercentage);
+    Serial.println("%");
+
     Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
     Serial.print(F("Time: "));
@@ -409,6 +417,16 @@ void updateSystem(){
 
     //send a message to the phone about asking for the weather
     //HWSERIAL.print("TEST");
+
+    if(RTC.alarm(ALARM_1)){
+      createAlert("ALARM1",6,10);
+      Serial.println("ALARM 1 HAD GONE OFF");
+    }
+
+    if(RTC.alarm(ALARM_2)){
+      createAlert("ALARM2",6,10);
+      Serial.println("ALARM 2 HAD GONE OFF");
+    }
 
   }
   if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
@@ -449,17 +467,17 @@ void loop(void) {
   } while( u8g_NextPage(&u8g) );
     handleInput();
     while(HWSERIAL.available()){
-    message[messageIndex] = char(HWSERIAL.read());//store char from serial command
-    messageIndex++;
-    if(messageIndex >= 99){
-      //this message is too big something went wrong flush the message out the system and break the loop
-      Serial.println(F("Error message overflow, flushing buffer and discarding message."));
-      messageIndex = 0;
-      memset(message, 0, sizeof(message)); //resetting array
-      HWSERIAL.flush();
-      break;
-    }
-    delay(1);
+      message[messageIndex] = char(HWSERIAL.read());//store char from serial command
+      messageIndex++;
+      if(messageIndex >= 99){
+        //this message is too big something went wrong flush the message out the system and break the loop
+        Serial.println(F("Error message overflow, flushing buffer and discarding message."));
+        messageIndex = 0;
+        memset(message, 0, sizeof(message)); //resetting array
+        HWSERIAL.flush();
+        break;
+      }
+      delay(1);
   }
   if(!HWSERIAL.available()){
     if(messageIndex > 0){
@@ -495,6 +513,32 @@ void loop(void) {
         messageIndex = 0;
         memset(message, 0, sizeof(message));
         resetTransmissionVariables();
+      }else if((messageIndex < 2) && receiving){//doesn't contain a full tag and we are receiving
+        //store this message and combine the next one and check if it equals <f>
+        if(!checkingTag){
+          for(int j = 0; j < messageIndex; j++){
+            messageBuffer[j] = message[j];
+          }
+          checkingTag = true;
+        } else {
+          int currentAmount = sizeof(messageBuffer);
+          if((currentAmount + (messageIndex + 1)) == 3){
+            //we have found a tag
+            for(int k = (currentAmount - 1); k < (3 - (messageIndex + 1)); k++){
+                messageBuffer[k] = message[k];
+            }
+            //if its an <f> then we finish else we carry on
+            if(startsWith(messageBuffer,"<f>",3)){
+              Serial.println("We Found a finish tag that got corrupted!");
+              // make ready to process true cuz were done
+              readyToProcess = true;
+            }
+            //reset checkingTag flag
+            checkingTag = false;
+            //reset array
+            memset(messageBuffer,0,sizeof(messageBuffer));
+          }
+        }
       }
       if(!startsWith(message,"<f>",3)){
         if(startsWith(message,"<i>",3)){
@@ -1163,7 +1207,7 @@ void getTimeFromDevice(char message[], int len){
   int dateIndex = 0;
   int clockLoopIndex = 0;
      bool gotDate = false;
-     for(int i = 3; i< len;i++){ // i =3 skips first 3 chars
+     for(int i = 3; i< len;i++){ // i = 3 skips first 3 chars
       if(!gotDate){
        if(message[i]==' '){
           dateArray[dateIndex] = atoi(buf);
@@ -1190,7 +1234,6 @@ void getTimeFromDevice(char message[], int len){
         }
       }
      }
-
      //Read from the RTC
      RTC.read(tm);
      //Compare to time from Device(only minutes and hours doesn't have to be perfect)
@@ -1209,6 +1252,10 @@ void getTimeFromDevice(char message[], int len){
 * System methods
 */
 
+void setAlarm(int minutes, int hours, int date){
+  RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
+}
+
 void createAlert(char text[],int len, int vibrationTime){
   if(len < 20){
     lastPage = pageIndex;
@@ -1224,7 +1271,7 @@ void createAlert(char text[],int len, int vibrationTime){
 }
 
 void vibrate(int vibrationTime){
-  alertVibrationCount = (vibrationTime) * 2;
+  alertVibrationCount = (vibrationTime) * 2;// double it as we toggle vibrate twice a second
 }
 
 void saveSettingToEEPROM(int address){
@@ -1240,7 +1287,7 @@ void readSettingsFromEEPROM(){
 }
 
 void drawTriangle(int x, int y, int size, int direction){
-  // some triangle are misshapen need to fix
+  // some triangle are miss-shapen need to fix
   switch (direction) {
     case 1: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); break; //down
     case 2: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); break; //up
@@ -1255,11 +1302,10 @@ void setClockTime(int hours,int minutes,int seconds, int days, int months, int y
   tm.Second = seconds;
   tm.Day = days;
   tm.Month = months;
-  //This is correct
   tm.Year = CalendarYrToTm(years);
   t = makeTime(tm);
 
-  if(RTC.set(t) == 0) { // Success
+  if(RTC.set(t) == 1) { // Success
     setTime(t);
     Serial.println(F("Writing time to RTC was successfull!"));
     gotUpdatedTime= true;
@@ -1287,6 +1333,7 @@ void removeNotification(int pos){
   if ( pos >= notificationIndex + 1 ){
     Serial.println(F("Can't delete notification."));
   } else {
+    //need to zero out the array or stray chars will overlap with notifications
     memset(notifications[pos].text,0,sizeof(notifications[pos].text));
     memset(notifications[pos].title,0,sizeof(notifications[pos].title));
     memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
@@ -1309,18 +1356,9 @@ float getBatteryVoltage(){
    for(int i=0; i<100; i++){
     reads+= analogRead(BATT_READ);
    }
-   //change math below to reflect the voltage divider change
-  return (reads/100) * (3.3 / 1024);
-}
-
-void alert(){
-  //buzzes with vibration motor
-  //activates transistor that connects the buzzer with 3.3v
-  // due to the nature of transistors there is 0.7v drop
-  //bringing the voltage to 2.6v - which is safe for the motors
-    digitalWrite(VIBRATE_PIN,HIGH);
-    delay(500);
-    digitalWrite(VIBRATE_PIN,LOW);
+   // R1 = 2000, R2 = 3300
+   // Vin = (Vout * (R1 + R2)) / R2
+  return ((reads/100) * (3.3 / 1024) * (3300 + 2000))/(3300);
 }
 
 /*

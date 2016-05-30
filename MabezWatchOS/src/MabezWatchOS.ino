@@ -4,6 +4,7 @@
 #include <i2c_t3.h>
 #include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
 #include <EEPROM.h>
+
 #define HWSERIAL Serial1
 
 //needed for calculating Free RAM on ARM based MC's
@@ -22,6 +23,7 @@ u8g_t u8g;
 
    Currently with no power saving techniques the whole thing runs on just 28millisamps, therfore
         240 mah battery / 28ma current draw = 8.5 hours of on time
+   Battery Update: Left to discharge whilst connected to the App, we got 8 hours and 22 minutes, very close to the 8 hours 30mins we calculated
  *
  * Update:
  *  -(04/04/16)UI Improved vastly.
@@ -40,8 +42,10 @@ u8g_t u8g;
     -(25/05/16) Added vibration system methods
     -(26/05/16) [MAJOR] We now tell the app to hold the notifications in a queue till we are ready to read them, this solves all the memory concerns had
     -(26/05/16) Switched from DS1302 RTC to smaller, better DS3231
+    -(31/05/16) Added battery charging algorithm, works well enough to know when a single lithium cell is charged
  *
  *  Buglist:
+    -midnight on the digital clock widget produces three zeros must investigate
  *
  *
  *  Todo:
@@ -84,6 +88,11 @@ u8g_t u8g;
       - Switch to DS3231 RTC - [DONE]  but we need to implement our methods to get temperature, and set alarms by translating code from another lib
           - Use the alarm functionality of this module to create an alarm page( only 2 alarms though I Believe)
           - We can also get the temperature outside with it
+      - add a battery chargin widget which shows more info about the battery chargin like its current percent (display a graphic?)
+      - implement a CPU clockdown when idle
+          - will need to account for the slower clocks when doing timing events
+      - once weve built it, turn off usb power
+
  */
 
 //input vars
@@ -96,6 +105,7 @@ bool lastb_down = false;
 
 #define CONFIRMATION_TIME 80 //length in time the button has to be pressed for it to be a valid press
 #define INPUT_TIME_OUT 60000 //60 seconds
+#define TOUCH_THRESHOLD 1200
 
 //need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
 #define UP_ONLY  4
@@ -107,7 +117,8 @@ bool lastb_down = false;
 #define ALL_THREE (UP_ONLY|OK_ONLY|DOWN_ONLY)
 #define NONE_OF_THEM  0
 
-#define isButtonPressed(pin)  (digitalRead(pin) == LOW)
+//#define isButtonPressed(pin)  (digitalRead(pin) == LOW)
+#define isButtonPressed(pin) (touchRead(pin) > TOUCH_THRESHOLD)
 
 int lastVector = 0;
 long prevButtonPressed = 0;
@@ -125,7 +136,7 @@ char messageBuffer[3];
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-String PROGMEM days[7] = {"Sunday`","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 
 //weather vars
 bool weatherData = false;
@@ -154,6 +165,7 @@ typedef struct{
   char title[15];
   char text[150];
   int dateReceived[2];
+  int textLength;
 } Notification;
 
 //notification vars
@@ -161,13 +173,12 @@ int notificationIndex = 0;
 int PROGMEM notificationMax = 10;
 Notification notifications[10];
 bool wantNotifications = true;
-
 bool shouldRemove = false;
 
 //pin constants
-const int PROGMEM OK_BUTTON = 4;
-const int PROGMEM DOWN_BUTTON = 5;
-const int PROGMEM UP_BUTTON = 3;
+const int PROGMEM OK_BUTTON = 17;
+const int PROGMEM DOWN_BUTTON = 16;
+const int PROGMEM UP_BUTTON = 15;
 const int PROGMEM BATT_READ = A6;
 const int PROGMEM VIBRATE_PIN = 10;
 const int PROGMEM CHARGING_STATUS_PIN = 9;
@@ -205,6 +216,11 @@ int currentLine = 0;
 float batteryVoltage = 0;
 int batteryPercentage = 0;
 bool isCharging = false;
+bool voltageReached = false; // we determine this by seeing if the batt percent is over 95% and isCharging is false
+const int BATT_CHARGED_THRESHOLD = 95;
+const int BATT_CURRENT_CHARGE_TIME = 720; // 12 min charge intervals
+bool isCharged = false;
+int chargeCurrentTimer = 0;
 
 //timer variables
 int timerArray[3] = {0,0,0}; // h/m/s
@@ -244,6 +260,8 @@ const int charsThatFit = 20; //only with default font. 0-20 = 21 chars
 char lineBuffer[21]; // 21 chars                             ^^
 int charIndex = 0;
 
+bool idle = false;
+
 //Logo for loading
 const byte PROGMEM LOGO[] = {
   0x00, 0x00, 0x00, 0x1e, 0x00, 0x0f, 0x3e, 0x80, 0x0f, 0x3e, 0x80, 0x0f,
@@ -268,11 +286,8 @@ void setup(void) {
   pinMode(UP_BUTTON,INPUT_PULLUP);
 
   pinMode(BATT_READ,INPUT);
-  pinMode(CHARGING_STATUS_PIN,INPUT_PULLUP); //INPUT_PULLUP  used as were only ready if we are charing or not
+  pinMode(CHARGING_STATUS_PIN,INPUT);
   pinMode(VIBRATE_PIN,OUTPUT);
-
-  //RTC.haltRTC(false);
-  //RTC.writeEN(false);
 
   u8g_prepare();
 
@@ -291,7 +306,7 @@ void setup(void) {
 
   Serial.println(F("MabezWatch OS Loaded!"));
 
-  //setAlarm(50,2,28);
+  setAlarm(2,3,28);
 }
 
 void u8g_prepare(void) {
@@ -342,24 +357,48 @@ void updateSystem(){
 
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
-    batteryPercentage = ((batteryVoltage - 3)/1.2)*100; // not accurate but should be enough
-    isCharging = !digitalRead(CHARGING_STATUS_PIN); //invert because pull up
-
+    batteryPercentage = ((batteryVoltage - 3)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts
+    isCharging = digitalRead(CHARGING_STATUS_PIN);
     //make sure we never display a negative percentage
     if(batteryPercentage < 0){
       batteryPercentage = 0;
+    } else if(batteryPercentage > 100){
+      batteryPercentage = 100;
+    }
+    //check if we are fully charged
+    if(isCharging && (batteryPercentage > BATT_CHARGED_THRESHOLD) && !voltageReached){ // wait till weve dropped to BATT_CHARGED_THRESHOLD% to start displaying the percentage again
+      voltageReached = true;
+      chargeCurrentTimer = BATT_CURRENT_CHARGE_TIME; //12 min charge Intervals mins need to do some research too find how long it will actually take
+    } else {
+      if(chargeCurrentTimer > 0 && voltageReached){
+        if(isCharging){//keep checking were still charging
+          chargeCurrentTimer--;
+        } else {
+          chargeCurrentTimer = 0; // if we stop charging via disconnect rest the timer
+        }
+      } else {
+        if(batteryPercentage > 95){ //once we drop to 90% allow charging again
+          isCharged = true;
+        } else {
+          voltageReached = false;
+          isCharged = false;
+        }
+      }
     }
 
+    //check if we have space for new notifications
     if(notificationIndex < (notificationMax - 4) && !wantNotifications){
-      Serial.println("WE WANT NOTIFICATION AGAIN!");
+      Serial.println("Ready to receive notifications.");
       HWSERIAL.print("<n>");
       wantNotifications = true;
     }
 
+    //loading screen counter
     if(loading!=0){
       loading--;
     }
 
+    //timer countdown algorithm
     if(isRunning){
       if(timerArray[2] > 0){
         timerArray[2]--;
@@ -396,6 +435,23 @@ void updateSystem(){
     Serial.print(batteryPercentage);
     Serial.println("%");
 
+
+    Serial.print("Battery Status: ");
+    if(isCharged){
+      Serial.println("Fully charged");
+    } else if(isCharging){
+      Serial.println("Charging");
+    } else {
+      Serial.println("Running down");
+    }
+
+    Serial.print("Idle power save: ");
+    if(idle){
+      Serial.println("Active");
+    } else {
+      Serial.println("Not Active");
+    }
+
     Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
     Serial.print(F("Time: "));
@@ -415,9 +471,7 @@ void updateSystem(){
     Serial.println(FreeRam());
     Serial.println(F("=============================================="));
 
-    //send a message to the phone about asking for the weather
-    //HWSERIAL.print("TEST");
-
+    //Alarm checks
     if(RTC.alarm(ALARM_1)){
       createAlert("ALARM1",6,10);
       Serial.println("ALARM 1 HAD GONE OFF");
@@ -428,7 +482,15 @@ void updateSystem(){
       Serial.println("ALARM 2 HAD GONE OFF");
     }
 
+
+    HWSERIAL.print("<b>");
+    HWSERIAL.print(batteryPercentage);
+    HWSERIAL.print(",");
+    HWSERIAL.print(batteryVoltage);
+    HWSERIAL.print(",");
+    HWSERIAL.print(chargeCurrentTimer);
   }
+
   if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
     prevAlertMillis = currentInterval;
     vibrating = !vibrating;
@@ -522,7 +584,7 @@ void loop(void) {
           checkingTag = true;
         } else {
           int currentAmount = sizeof(messageBuffer);
-          if((currentAmount + (messageIndex + 1)) == 3){
+          if((currentAmount + (messageIndex + 1)) == 3){ //make sure it's a tag and it doesnt exceed the array index
             //we have found a tag
             for(int k = (currentAmount - 1); k < (3 - (messageIndex + 1)); k++){
                 messageBuffer[k] = message[k];
@@ -692,15 +754,20 @@ void settingsMenuItem(int position){
 }
 
 
-
 void notificationFullPage(int chosenNotification){
   int lines = 0;
   charIndex = 0; //make sure we rest index
 
-  int textLength = sizeof(notifications[chosenNotification].text);
+  int textLength = notifications[chosenNotification].textLength;
+  /*char *ptr = notifications[chosenNotification].text;
+  while(*ptr != '\0'){
+    textLength++;
+    ptr++;
+  }*/
+
   if(textLength > charsThatFit){
     for(int i=0; i < textLength; i++){
-      if(charIndex >= charsThatFit){
+      if((charIndex >= charsThatFit) || i == (textLength - 1)){ // i == textLength so we catch what we ahve of a line if we dont have a complete line
         lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
         u8g_DrawStr(&u8g,0,lines * 10 + FONT_HEIGHT + Y_OFFSET, lineBuffer); //draw the line
         lines++;
@@ -711,14 +778,17 @@ void notificationFullPage(int chosenNotification){
         charIndex++;
       }
     }
-    lineCount = (lines - 1);
   } else {
     u8g_DrawStr(&u8g,0,FONT_HEIGHT,notifications[chosenNotification].text);
+    lines++;
   }
+  lineCount = (lines); //- 1);
+  intTo2Chars(lineCount);
+  u8g_DrawStr(&u8g,64,50 + FONT_HEIGHT,numberBuffer);
+  u8g_DrawStr(&u8g, 30, 50, String(textLength).c_str());
 }
 
 void homePage(int hour, int minute,int second){
-  //need to add am pm thing
   u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
   u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
   u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
@@ -776,14 +846,14 @@ void homePage(int hour, int minute,int second){
   u8g_DrawStr(&u8g,119,-1 + FONT_HEIGHT,itoa(notificationIndex,numberBuffer,10));
 
   //battery voltage
-  if(!isCharging){
+  if(!isCharging && !isCharged){
     if(batteryPercentage != 100){
       u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
       u8g_DrawStr(&u8g,89,11,"%");
-    } else {
-      //need draw something here to signify we are fully charged
-      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10)); //atm we are just drawing without the percentage
     }
+  } else if(isCharged){
+    //need draw something here to signify we are fully charged
+    u8g_DrawStr(&u8g,77,11,itoa(100,numberBuffer,10)); //atm we are just drawing without the percentage
   } else {
     //draw symbol to show that we are charging here
     u8g_DrawXBMP(&u8g,80,2,14,12,CHARGING);
@@ -898,6 +968,7 @@ void handleInput(){
         widgetSelector = settingValue[0];// and our fav widget
       }
       prevButtonPressed = millis();
+      idle = false;
     }
       if(vector == NONE_OF_THEM){
         if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
@@ -905,6 +976,9 @@ void handleInput(){
           prevButtonPressed = 0;
           pageIndex = HOME_PAGE; // take us back to the home page
           widgetSelector = settingValue[0]; //and our fav widget
+          Y_OFFSET = 0;// reset the Y_OFFSET so if we come off a page with an offset it doesnt get bugged
+          currentLine = 0;
+          idle = true;
         }
       }
     lastVector = vector;
@@ -1094,6 +1168,13 @@ int getConfirmedInputVector()
     isButtonPressed(DOWN_BUTTON) << 1 |
     isButtonPressed(UP_BUTTON) << 0;
 
+  /*Serial.print("Okay Button: ");
+  Serial.println(touchRead(OK_BUTTON));
+  Serial.print("Down Button: ");
+  Serial.println(touchRead(DOWN_BUTTON));
+  Serial.print("Up Button: ");
+  Serial.println(touchRead(UP_BUTTON));*/
+
   // On a change in vector, don't return the new one!
   if (rawVector != lastVector)
   {
@@ -1188,10 +1269,14 @@ void getNotification(char notificationItem[],int len){
   notifications[notificationIndex].dateReceived[0] = clockArray[0];
   notifications[notificationIndex].dateReceived[1] = clockArray[1];
 
+  notifications[notificationIndex].textLength = charIndex;
+
   Serial.print(F("Notification title: "));
   Serial.println(notifications[notificationIndex].title);
   Serial.print(F("Notification text: "));
   Serial.println(notifications[notificationIndex].text);
+  Serial.print("Text length: ");
+  Serial.println(notifications[notificationIndex].textLength);
   notificationIndex++;
 }
 

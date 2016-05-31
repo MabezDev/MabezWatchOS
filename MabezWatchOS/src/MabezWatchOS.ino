@@ -98,8 +98,13 @@ u8g_t u8g;
 
       - alarm page started:
           - need work out how to make sure the date is a valid date, may need to use the RTC lib make time to get valid date
-          - store alarm deets in eeprom
-          - add alarm selector fucntionality
+          - store alarm deets in eeprom -DONE
+          - add alarm selector fucntionality -DONE
+          // -replace the daysInMNonth array by using the RTC make time functinality?
+
+      - Add a charging low power state where we draw little to no current,
+          so the lithium charger can do its job, we can deep sleep and wake up in intervals as when it is charging we can't do much with it anyways
+          - The snooze lib does not work with my version on teensyduino, will need to downgrade
 
  */
 
@@ -276,8 +281,10 @@ int charIndex = 0;
 bool activeAlarms[2] = {false,false};
 int alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
 const int PROGMEM alarmMaxValues[3] = {23,59,6};
-short alarmToggle = 1; // alarm1 = 0, alarm2 = 1
+short alarmToggle = 0; // alarm1 = 0, alarm2 = 1
+short prevAlarmToggle = 1;
 int alarmIndex = 0;
+const int ALARM_ADDRESS = 20;//start at 30, each alarm has 4 stored values, active,hours,mins,dateDay
 
 //used for power saving
 bool idle = false;
@@ -311,7 +318,17 @@ void setup(void) {
 
   u8g_prepare();
 
-  readSettingsFromEEPROM(); // load the settings in from EEPROM
+  for(int i = 0; i < numberOfSettings; i++){
+    settingValue[i] = readFromEEPROM(i);
+  }
+
+  //eeprom reset
+  /*for(int j=0; j < EEPROM.length(); j ++){
+    saveToEEPROM(j,0);
+  }*/
+
+  activeAlarms[0] = readFromEEPROM(ALARM_ADDRESS);
+  activeAlarms[1] = readFromEEPROM(ALARM_ADDRESS + 5);
 
   messagePtr = &message[0]; // could have used messagePtr = message
 
@@ -495,6 +512,7 @@ void updateSystem(){
         createAlert("ALARM1",6,10);
         Serial.println("ALARM 1 HAD GONE OFF");
         activeAlarms[0] = false;
+        saveToEEPROM(ALARM_ADDRESS,activeAlarms[0]);
       }
     }
     if(activeAlarms[1]){
@@ -502,6 +520,7 @@ void updateSystem(){
         createAlert("ALARM2",6,10);
         Serial.println("ALARM 2 HAD GONE OFF");
         activeAlarms[1] = false;
+        saveToEEPROM(ALARM_ADDRESS + 5,activeAlarms[1]);
       }
     }
 
@@ -706,20 +725,49 @@ void alarmPage(){
       dayAhead = 0;
     }
   }
+
+  //check if alarms are active
+  if(alarmToggle!=prevAlarmToggle){
+    for(int k = 0; k < 2; k++){
+      alarmTime[k] = 0;
+    }
+    int address = 0;
+    if(alarmToggle == 0 && activeAlarms[alarmToggle]){
+      address = ALARM_ADDRESS + 1;
+    } else if(alarmToggle == 1 && activeAlarms[alarmToggle]) {
+      address = ALARM_ADDRESS + 5;
+    }
+    alarmTime[0] = readFromEEPROM(address);
+    address++;
+    alarmTime[1] = readFromEEPROM(address);
+    address++;
+    int date = readFromEEPROM(address);
+    address++;
+    int monthSet = readFromEEPROM(address);
+    if(date == dateArray[0]){
+      alarmTime[2] = 0;
+    } else {
+      alarmTime[2] = (date + dayInMonth[monthSet - 1]) - dateArray[0];
+    }
+    prevAlarmToggle = alarmToggle;
+  }
+
   u8g_DrawStr(&u8g, 84,35,days[dayAhead].c_str());
 
   if(alarmToggle == 0){
-    u8g_DrawStr(&u8g, 44,2 + FONT_HEIGHT,"Alarm One");
+    u8g_DrawStr(&u8g, 0,0 + FONT_HEIGHT,"One");
   } else {
-    u8g_DrawStr(&u8g, 44,2 + FONT_HEIGHT,"Alarm Two");
+    u8g_DrawStr(&u8g, 0,0 + FONT_HEIGHT,"Two");
   }
 
 
   if(!activeAlarms[alarmToggle]){
-    u8g_DrawStr(&u8g, 30,54,"Set");
+    u8g_DrawStr(&u8g, 34,54,"Set");
   } else {
     u8g_DrawStr(&u8g, 30,54,"Unset");
   }
+
+  u8g_DrawStr(&u8g, 70,54,"Swap");
 
 
   drawSelectors(alarmIndex);
@@ -896,7 +944,7 @@ void homePage(int hour, int minute,int second){
     case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
-    case 7: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Alarms"); break;
+    case 7: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); u8g_SetFont(&u8g, u8g_font_6x12); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -913,7 +961,8 @@ void homePage(int hour, int minute,int second){
   //battery voltage
   if(!isCharging && !isCharged){
     if(batteryPercentage != 100){
-      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
+      char temp[3];
+      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,temp,10));
       u8g_DrawStr(&u8g,89,11,"%");
     }
   } else if(isCharged){
@@ -1095,7 +1144,7 @@ void handleUpInput(){
       }
     } else {
       alarmIndex++;
-      if(alarmIndex > 3){
+      if(alarmIndex > 4){
         alarmIndex = 0; // 3 is max
       }
     }
@@ -1174,7 +1223,7 @@ void handleDownInput(){
     } else {
       alarmIndex--;
       if(alarmIndex < 0){
-        alarmIndex = 3; // 3 is max
+        alarmIndex = 4; // 3 is max
       }
     }
   } else {
@@ -1235,7 +1284,7 @@ void handleOkInput(){
     } else {
       locked = !locked;
       if(!locked){
-        saveSettingToEEPROM(menuSelector);
+        saveToEEPROM(menuSelector,settingValue[menuSelector]);
       }
     }
   } else if(pageIndex == ALERT){
@@ -1243,21 +1292,28 @@ void handleOkInput(){
     alertTextLen = 0; //reset the index
     pageIndex = lastPage; //go back
   } else if(pageIndex == ALARM_PAGE){
+    //handle alarmInput
     if(alarmIndex == 3){
       activeAlarms[alarmToggle] = !activeAlarms[alarmToggle];
       if(activeAlarms[alarmToggle]){
         if((dateArray[0] + alarmTime[2]) > dayInMonth[dateArray[1] - 1]){
-          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], ((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1])); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
+          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], ((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1]),dateArray[1]); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
           Serial.print("Alarm set for the : ");
           Serial.println(((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
         } else {
-          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], (dateArray[0] + alarmTime[2]));
+          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], (dateArray[0] + alarmTime[2]),dateArray[1]);
           Serial.print("Alarm set for the : ");
           Serial.println((dateArray[0] + alarmTime[2]));
         }
 
       }
 
+   } else if(alarmIndex == 4){
+     if(alarmToggle == 0){
+       alarmToggle = 1;
+     } else {
+       alarmToggle = 0;
+     }
    } else {
      locked = !locked;
    }
@@ -1447,14 +1503,28 @@ void getTimeFromDevice(char message[], int len){
 * System methods
 */
 
-void setAlarm(bool alarmType, int hours, int minutes, int date){
+void setAlarm(int alarmType, int hours, int minutes, int date,int month){
+  int start = 0;
   if(alarmType == 0){
     RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
     Serial.println("ALARM1 Set!");
+    start = ALARM_ADDRESS;
   } else {
     RTC.setAlarm(ALM2_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
     Serial.println("ALARM2 Set!");
+    start = ALARM_ADDRESS + 4;
   }
+  Serial.print("Starting write at address: ");
+  Serial.println(start);
+  saveToEEPROM(start,true); //set alarm active
+  start++;
+  saveToEEPROM(start,hours);
+  start++;
+  saveToEEPROM(start,minutes);
+  start++;
+  saveToEEPROM(start,date);
+  start++;
+  saveToEEPROM(start,month);
 }
 
 void createAlert(char text[],int len, int vibrationTime){
@@ -1475,16 +1545,14 @@ void vibrate(int vibrationTime){
   alertVibrationCount = (vibrationTime) * 2;// double it as we toggle vibrate twice a second
 }
 
-void saveSettingToEEPROM(int address){
+void saveToEEPROM(int address,int value){
   if(address < EEPROM.length()){
-    EEPROM.write(address,settingValue[address]);
+    EEPROM.write(address,value);
   }
 }
 
-void readSettingsFromEEPROM(){
-  for(int i=0; i < numberOfSettings; i++){
-    settingValue[i] = EEPROM.read(i);
-  }
+int readFromEEPROM(int address){
+    return EEPROM.read(address);
 }
 
 void drawTriangle(int x, int y, int size, int direction){

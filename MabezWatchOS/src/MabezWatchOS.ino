@@ -46,6 +46,7 @@ u8g_t u8g;
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate
+        - might be due to the fact a itoa func make a number wwith 3 characters
  *
  *
  *  Todo:
@@ -92,6 +93,13 @@ u8g_t u8g;
       - implement a CPU clockdown when idle
           - will need to account for the slower clocks when doing timing events
       - once weve built it, turn off usb power
+      - code efficeincy could be improved by only using one index variable instead of an indx for each page as only on page can be accessed at a time
+          - also change ints to shorts when the length is not needed
+
+      - alarm page started:
+          - need work out how to make sure the date is a valid date, may need to use the RTC lib make time to get valid date
+          - store alarm deets in eeprom
+          - add alarm selector fucntionality
 
  */
 
@@ -137,6 +145,7 @@ char messageBuffer[3];
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
 String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+const short PROGMEM dayInMonth[12] = {31,28,31,30,31,30,31,31,30,31,30,31}; //does not account for leap year
 
 //weather vars
 bool weatherData = false;
@@ -189,8 +198,9 @@ const int PROGMEM NOTIFICATION_MENU = 1;
 const int PROGMEM NOTIFICATION_BIG = 2;
 const int PROGMEM TIMER = 4;
 const int PROGMEM SETTINGS = 5;
+const int PROGMEM ALARM_PAGE = 6;
 
-const int PROGMEM ALERT = 6;
+const int PROGMEM ALERT = 10;
 
 //UI constants
 const int PROGMEM MENU_ITEM_HEIGHT = 16;
@@ -200,10 +210,10 @@ const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr 
 int pageIndex = 0;
 int menuSelector = 0;
 int widgetSelector = 0;
-const int numberOfNormalWidgets = 5; // actually 3, 0,1,2.
+const int numberOfNormalWidgets = 6; // actually 3, 0,1,2.
 const int numberOfDebugWidgets = 1;
 int numberOfWidgets = 0;
-int numberOfPages = 5; // actually 6 (0-5 = 6)
+int numberOfPages = 6; // actually 7 (0-6 = 7)
 
 const int x = 6;
 int y = 0;
@@ -226,6 +236,8 @@ int chargeCurrentTimer = 0;
 int timerArray[3] = {0,0,0}; // h/m/s
 bool isRunning = false;
 int timerIndex = 0;
+
+
 bool locked = false;
 
 //connection
@@ -260,6 +272,14 @@ const int charsThatFit = 20; //only with default font. 0-20 = 21 chars
 char lineBuffer[21]; // 21 chars                             ^^
 int charIndex = 0;
 
+//alarm vars
+bool activeAlarms[2] = {false,false};
+int alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
+const int PROGMEM alarmMaxValues[3] = {23,59,6};
+short alarmToggle = 1; // alarm1 = 0, alarm2 = 1
+int alarmIndex = 0;
+
+//used for power saving
 bool idle = false;
 
 //Logo for loading
@@ -305,8 +325,6 @@ void setup(void) {
   HWSERIAL.print("AT");
 
   Serial.println(F("MabezWatch OS Loaded!"));
-
-  setAlarm(2,3,28);
 }
 
 void u8g_prepare(void) {
@@ -472,14 +490,19 @@ void updateSystem(){
     Serial.println(F("=============================================="));
 
     //Alarm checks
-    if(RTC.alarm(ALARM_1)){
-      createAlert("ALARM1",6,10);
-      Serial.println("ALARM 1 HAD GONE OFF");
+    if(activeAlarms[0]){
+      if(RTC.alarm(ALARM_1)){
+        createAlert("ALARM1",6,10);
+        Serial.println("ALARM 1 HAD GONE OFF");
+        activeAlarms[0] = false;
+      }
     }
-
-    if(RTC.alarm(ALARM_2)){
-      createAlert("ALARM2",6,10);
-      Serial.println("ALARM 2 HAD GONE OFF");
+    if(activeAlarms[1]){
+      if(RTC.alarm(ALARM_2)){
+        createAlert("ALARM2",6,10);
+        Serial.println("ALARM 2 HAD GONE OFF");
+        activeAlarms[1] = false;
+      }
     }
 
 
@@ -522,8 +545,9 @@ void loop(void) {
         case 1: notificationMenuPage(); break;
         case 2: notificationFullPage(menuSelector); break;
         case 4: timerPage(); break;
-        case 5: settingsPage(); break; //read the newst settings
-        case 6: alertPage(); break;
+        case 5: settingsPage(); break;
+        case 6: alarmPage(); break;
+        case 10: alertPage(); break;
       }
     }
   } while( u8g_NextPage(&u8g) );
@@ -665,6 +689,42 @@ void loop(void) {
 * Page Methods
 */
 
+void alarmPage(){
+  u8g_DrawStr(&u8g, 24,23,"H");
+  u8g_DrawStr(&u8g, 54,23,"M");
+  u8g_DrawStr(&u8g, 84,23,"D");
+
+  intTo2Chars(alarmTime[0]);
+  u8g_DrawStr(&u8g, 24,35,numberBuffer);
+  intTo2Chars(alarmTime[1]);
+  u8g_DrawStr(&u8g, 54,35,numberBuffer);
+  //draw day of week set up to a week in advance
+  int dayAhead = dateArray[3] - 1; //set current day
+  for(int i = 0; i < alarmTime[2]; i++){ // add the exra days
+    dayAhead++;
+    if(dayAhead > 6){
+      dayAhead = 0;
+    }
+  }
+  u8g_DrawStr(&u8g, 84,35,days[dayAhead].c_str());
+
+  if(alarmToggle == 0){
+    u8g_DrawStr(&u8g, 44,2 + FONT_HEIGHT,"Alarm One");
+  } else {
+    u8g_DrawStr(&u8g, 44,2 + FONT_HEIGHT,"Alarm Two");
+  }
+
+
+  if(!activeAlarms[alarmToggle]){
+    u8g_DrawStr(&u8g, 30,54,"Set");
+  } else {
+    u8g_DrawStr(&u8g, 30,54,"Unset");
+  }
+
+
+  drawSelectors(alarmIndex);
+}
+
 void timerPage(){
   u8g_DrawStr(&u8g, 24,23,"H");
   u8g_DrawStr(&u8g, 54,23,"M");
@@ -677,21 +737,7 @@ void timerPage(){
   intTo2Chars(timerArray[2]);
   u8g_DrawStr(&u8g, 84,35,numberBuffer);
 
-  if(locked){
-    switch (timerIndex) {
-      case 0: drawTriangle(22,10,8,2); drawTriangle(22,38,8,1); break;
-      case 1: drawTriangle(52,10,8,2); drawTriangle(52,38,8,1); break;
-      case 2: drawTriangle(82,10,8,2); drawTriangle(82,38,8,1); break;
-    }
-  } else {
-    switch (timerIndex) {
-      case 0: drawTriangle(22,8,8,1); break;
-      case 1: drawTriangle(52,8,8,1);break;
-      case 2: drawTriangle(82,8,8,1); break;
-      case 3: u8g_DrawFrame(&u8g,28,45,34,13); break; //draw rectangle around this option
-      case 4: u8g_DrawFrame(&u8g,68,45,34,13); break; //draw rectangle around this option
-    }
-  }
+  drawSelectors(timerIndex);
 
   if(isRunning){
     u8g_DrawStr(&u8g, 30,54,"Stop");
@@ -702,6 +748,24 @@ void timerPage(){
   u8g_DrawStr(&u8g, 70,54,"Reset");
 
 
+}
+
+void drawSelectors(int index){
+  if(locked){
+    switch (index) {
+      case 0: drawTriangle(22,10,8,2); drawTriangle(22,38,8,1); break;
+      case 1: drawTriangle(52,10,8,2); drawTriangle(52,38,8,1); break;
+      case 2: drawTriangle(82,10,8,2); drawTriangle(82,38,8,1); break;
+    }
+  } else {
+    switch (index) {
+      case 0: drawTriangle(22,8,8,1); break;
+      case 1: drawTriangle(52,8,8,1);break;
+      case 2: drawTriangle(82,8,8,1); break;
+      case 3: u8g_DrawFrame(&u8g,28,45,34,13); break; //draw rectangle around this option
+      case 4: u8g_DrawFrame(&u8g,68,45,34,13); break; //draw rectangle around this option
+    }
+  }
 }
 
 void alertPage(){
@@ -832,6 +896,7 @@ void homePage(int hour, int minute,int second){
     case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
+    case 7: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Alarms"); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -1022,6 +1087,18 @@ void handleUpInput(){
     } else {
       menuUp(numberOfSettings);
     }
+  } else if(pageIndex == ALARM_PAGE){
+    if(locked){
+      alarmTime[alarmIndex]++;
+      if(alarmTime[alarmIndex] > alarmMaxValues[alarmIndex]){
+        alarmTime[alarmIndex] = alarmMaxValues[alarmIndex];
+      }
+    } else {
+      alarmIndex++;
+      if(alarmIndex > 3){
+        alarmIndex = 0; // 3 is max
+      }
+    }
   } else {
     Serial.println(F("Unknown Page."));
   }
@@ -1088,6 +1165,18 @@ void handleDownInput(){
     } else {
       menuDown();
     }
+  } else if(pageIndex == ALARM_PAGE){
+    if(locked){
+      alarmTime[alarmIndex]--;
+      if(alarmTime[alarmIndex] < 0){
+        alarmTime[alarmIndex] = 0;
+      }
+    } else {
+      alarmIndex--;
+      if(alarmIndex < 0){
+        alarmIndex = 3; // 3 is max
+      }
+    }
   } else {
     Serial.println(F("Unknown Page."));
   }
@@ -1104,6 +1193,8 @@ void handleOkInput(){
       pageIndex = SETTINGS;
     } else if(widgetSelector == 6){
         resetBTModule();
+    } else if(widgetSelector == 7){
+      pageIndex = ALARM_PAGE;
     }
     Y_OFFSET = 0;
   } else if(pageIndex == NOTIFICATION_MENU){
@@ -1151,6 +1242,25 @@ void handleOkInput(){
     memset(alertText,0,sizeof(alertText)); //reset the alertText
     alertTextLen = 0; //reset the index
     pageIndex = lastPage; //go back
+  } else if(pageIndex == ALARM_PAGE){
+    if(alarmIndex == 3){
+      activeAlarms[alarmToggle] = !activeAlarms[alarmToggle];
+      if(activeAlarms[alarmToggle]){
+        if((dateArray[0] + alarmTime[2]) > dayInMonth[dateArray[1] - 1]){
+          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], ((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1])); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
+          Serial.print("Alarm set for the : ");
+          Serial.println(((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
+        } else {
+          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], (dateArray[0] + alarmTime[2]));
+          Serial.print("Alarm set for the : ");
+          Serial.println((dateArray[0] + alarmTime[2]));
+        }
+
+      }
+
+   } else {
+     locked = !locked;
+   }
   } else {
     Serial.println(F("Unknown Page."));
   }
@@ -1322,7 +1432,7 @@ void getTimeFromDevice(char message[], int len){
      //Read from the RTC
      RTC.read(tm);
      //Compare to time from Device(only minutes and hours doesn't have to be perfect)
-     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[1] == tm.Day && dateArray[2] == tm.Month && dateArray[3] == tm.Year))){
+     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
         setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
         Serial.println(F("Setting the clock!"));
      } else {
@@ -1337,8 +1447,14 @@ void getTimeFromDevice(char message[], int len){
 * System methods
 */
 
-void setAlarm(int minutes, int hours, int date){
-  RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
+void setAlarm(bool alarmType, int hours, int minutes, int date){
+  if(alarmType == 0){
+    RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
+    Serial.println("ALARM1 Set!");
+  } else {
+    RTC.setAlarm(ALM2_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
+    Serial.println("ALARM2 Set!");
+  }
 }
 
 void createAlert(char text[],int len, int vibrationTime){
@@ -1451,10 +1567,12 @@ float getBatteryVoltage(){
 */
 
 void intTo2Chars(int number){
+  memset(numberBuffer,0,sizeof(numberBuffer));
   if(number < 10){
     //not working atm
     numberBuffer[0] = '0';
-    numberBuffer[1] = number + '0';
+    numberBuffer[1] = (number + 48);
+
   } else {
     itoa(number,numberBuffer,10);
   }

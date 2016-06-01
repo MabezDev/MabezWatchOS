@@ -2,15 +2,16 @@
 
 #include <u8g_i2c.h>
 #include <i2c_t3.h>
-#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
+#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions // when fresh installing delete the teensy core ds1307 lib and use our one with alram funcs
 #include <EEPROM.h>
 #include <Time.h>
+#include <Snooze.h>
 
 #define HWSERIAL Serial1
 
 //needed for calculating Free RAM on ARM based MC's
 #ifdef __arm__
-  extern "C" char* sbrk(short incr);
+  extern "C" char* sbrk(int incr);
 #else  // __ARM__
   extern char *__brkval;
   extern char __bss_end;
@@ -43,39 +44,38 @@ u8g_t u8g;
     -(25/05/16) Added vibration system methods
     -(26/05/16) [MAJOR] We now tell the app to hold the notifications in a queue till we are ready to read them, this solves all the memory concerns had
     -(26/05/16) Switched from DS1302 RTC to smaller, better DS3231
-    -(30/05/16) Added battery charging algorithm, works well enough to know when a single lithium cell is charged
-    -(30/05/16) Added alarm page and alarm functionality for both alarms available on the DS3231
-    -(31/05/16) The Tp4056 charger board I am using uses a open collector system, after running a wire directly from the TP4056 charge indicator pin, into pulled up pin
-                and it works! Luckily we draw less C/10 (Capacity of the battery/10) so the charge can terminate successfully!
-    -(31/05/16) Switched all (bar one) ints to shorts and gather about 230 bytes of RAM extra, and saved storage space too
+    -(31/05/16) Added battery charging algorithm, works well enough to know when a single lithium cell is charged
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate
-        - might be due to the fact a itoa func make a number wwith 3 characters (numberBuffer overflow)
+        - might be due to the fact a itoa func make a number wwith 3 characters
+	- redo tp4056 charger board, it has a open collector and we need to only connect to the low, need to add a pull up resistor so it isn't a floating value
  *
  *
  *  Todo:
- *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. - [DONE]
- *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in [OPTIONAL]
- *    -add reply phrases, if they are short answers like yeah, nah, busy right now etc. - [MINOR]
- *    -Could use a on screen keyboard but it might be too much hassle to use properly. - [OPTIONAL]
- *    -text wrapping on the full notification page - [NOT POSSIBLE], we dont have enough ram to play with to textwrap
- *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - [DONE]
-          - change the widget to the favorite stored in the settings - [DONE]
- *    - fix the alert function to have two pulses without delay (Fix could be aleRTCounter set it to 2 then vibrate and -- from aleRTCounter) - [DONE]
- *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side) - [NEED TESTING]
- *    - finish timer app (use our system click to time the seconds) - [DONE]
+ *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. -TESTED
+ *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in
+ *    -add reply phrases, if they are short answers like yeah, nah, busy right now etc.
+ *    -Could use a on screen keyabord but it miught be too much hassle to use properly.
+ *    -text wrapping on the full notification page
+ *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - DONE
+          - change the widget to the favorite stored in the settings - DONE
+ *    - fix the alert function to have two pulses without delay (Fix could be aleRTCounter set it to 2 then vibrate and -- from aleRTCounter) - DONE
+ *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side)
+ *    - finish timer app (use our system click to time the seconds) - BASIC FUNCTIONALITY COMPLETE - [TESTED]
           - need to alert the suer when the timer is up - DONE
-          - make it look better - [DONE]
+          - make it look better
  *    -settings page
           - favourite widget (will default to once no input is recieved) - DONE
- *        -use eeprom to store the settings so we dont have to set them - DONE
+ *    -use eeprom to store the settings so we dont have to set them - DONE
  *    -the lithium charger board has a two leds one to show charging one to show chargin done, need to hook into these to read when we are charging(to charge the RTC  batt(trickle charge))
-       and to change the status on the watch to charging etc - [DONE]
- *    - add more weatherinfo screen where we can see the forecast for the next days or hours etc - [OPTIONAL]
-      - tell the user no messages found on the messages screen - [DONE]
-      - write a generic menu function that takes a function as a parameter, the function will write 1 row of data - [DONE]
-      - Sometime the BT module can get confused (or the OS? or is the app?) and we can't connect till we rest the Watch - [DONE]
+       and to change the status on the watch to charging etc
+ *    - add software turn off
+ *    - add hardware power on/off
+ *    - add more weatherinfo screen where we can see the forecast for the next days or hours etc
+      - tell the user no messages found on the messages screen
+      - write a generic menu function that takes a function as a parameter, the function will write 1 row of data
+      - Sometime the BT module can get confused (or the OS? or is the app?) and we can't connect till we rest the Watch
           - Pin 11 (on the HM-11) held low for 100ms will reset the HM-11 Module.
           - or send AT+RESET to reset it aswell
       - request data from phone?, tell phone we have read a notification?
@@ -84,32 +84,30 @@ u8g_t u8g;
                   -request 5 day forecast?
               - request phone battery level
               -  we could tell the phone we have ran out of mem, so keep the rest of the notifications in the queue till there is space [DONE]
-      - Add time stamp for notifications? - (Would need to modify notification structure but we dont need any data from the phone use out RTC),
-              we have space due to the 15 char limit on the titles - [DONE]
-      - Keep tabs on Weather data to make sure its still valid (make sure were not displaying data that is hours old or something) - [DONE]
+      - Add time stamp for notifications? - (Would need to modify notification structure but we dont need any data from the phone use out RTC), we have space due to the 15 char limit on the titles
+      - Keep tabs on Weather data to mkae sure its still valid (make sure were not displaying data that is hours old or something)
       - add otion for alert to go away after x amount of seconds?
       - F() all strings - [DONE] (But makes no difference on ARM based MC's)
       - store tags like <i> as progmem constants for better readablity
       - Switch to DS3231 RTC - [DONE]  but we need to implement our methods to get temperature, and set alarms by translating code from another lib
-          - Use the alarm functionality of this module to create an alarm page( only 2 alarms though I Believe) - [DONE]
+          - Use the alarm functionality of this module to create an alarm page( only 2 alarms though I Believe)
           - We can also get the temperature outside with it
-      - add a battery charging widget which shows more info about the battery chargin like its current percent (display a graphic?) - [NOT POSSIBLE] we don't have that data to display
+      - add a battery chargin widget which shows more info about the battery chargin like its current percent (display a graphic?)
       - implement a CPU clockdown when idle
           - will need to account for the slower clocks when doing timing events
       - once weve built it, turn off usb power
       - code efficeincy could be improved by only using one index variable instead of an indx for each page as only on page can be accessed at a time
           - also change ints to shorts when the length is not needed
+
       - alarm page started:
           - need work out how to make sure the date is a valid date, may need to use the RTC lib make time to get valid date
           - store alarm deets in eeprom -DONE
           - add alarm selector fucntionality -DONE
           // -replace the daysInMNonth array by using the RTC make time functinality?
-      - The snooze lib too big and not really what I was looking for, I wanted dynamic CPU freq changes,
-          so clock down to 8mhz or something when we havent't interacted with the watch, then ramp up when we are interacting, but this will cause problems with serial comms I think
-      - add software turn on/off?
-          - instead of actually powering off, hibernate (using snooze lib), in this mode we will only draw micro amps, add interrupt on the OK button to wake up
-      - add hardware power on/off
 
+      - Add a charging low power state where we draw little to no current,
+          so the lithium charger can do its job, we can deep sleep and wake up in intervals as when it is charging we can't do much with it anyways
+          - The snooze lib does not work with my version on teensyduino, will need to downgrade
 
  */
 
@@ -122,8 +120,8 @@ bool button_down = false;
 bool lastb_down = false;
 
 #define CONFIRMATION_TIME 80 //length in time the button has to be pressed for it to be a valid press
-#define INPUT_TIME_OUT 60000 //60 seconds
-#define TOUCH_THRESHOLD 1200 // value will change depending on the capacitance of the material
+#define INPUT_TIME_OUT 6000 //60000 //60 seconds
+#define TOUCH_THRESHOLD 1200
 
 //need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
 #define UP_ONLY  4
@@ -135,18 +133,18 @@ bool lastb_down = false;
 #define ALL_THREE (UP_ONLY|OK_ONLY|DOWN_ONLY)
 #define NONE_OF_THEM  0
 
-//#define isButtonPressed(pin)  (digitalRead(pin) == LOW) this was old with buttons
+//#define isButtonPressed(pin)  (digitalRead(pin) == LOW)
 #define isButtonPressed(pin) (touchRead(pin) > TOUCH_THRESHOLD)
 
-short lastVector = 0;
+int lastVector = 0;
 long prevButtonPressed = 0;
 
 //serial retrieval vars
 char message[100]; // serial read buffer
 char *messagePtr; //this could be local to the receiving loop
 char finalData[250];//data set buffer
-short finalDataIndex = 0; //index is required as we dunno when we stop
-short messageIndex = 0;
+int finalDataIndex = 0; //index is required as we dunno when we stop
+int messageIndex = 0;
 bool readyToProcess = false;
 bool receiving = false;
 bool checkingTag = false;
@@ -162,19 +160,19 @@ bool weatherData = false;
 char weatherDay[4];
 char weatherTemperature[4];
 char weatherForecast[25];
-short timeWeGotWeather[2] = {0,0};
+int timeWeGotWeather[2] = {0,0};
 
 
 //time and date constants
 tmElements_t tm;
 time_t t;
-const short PROGMEM clockRadius = 32;
-const short PROGMEM clockUpdateInterval = 1000;
+const int PROGMEM clockRadius = 32;
+const int PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
 bool gotUpdatedTime = false;
-short clockArray[3] = {0,0,0};
-short dateArray[4] = {0,0,0,0};
+int clockArray[3] = {0,0,0};
+int dateArray[4] = {0,0,0,0};
 
 long prevMillis = 0;
 
@@ -183,88 +181,89 @@ typedef struct{
   char packageName[15];
   char title[15];
   char text[150];
-  short dateReceived[2];
-  short textLength;
+  int dateReceived[2];
+  int textLength;
 } Notification;
 
 //notification vars
-short notificationIndex = 0;
-short PROGMEM notificationMax = 10;
+int notificationIndex = 0;
+int PROGMEM notificationMax = 10;
 Notification notifications[10];
 bool wantNotifications = true;
 bool shouldRemove = false;
 
 //pin constants
-const short PROGMEM OK_BUTTON = 17;
-const short PROGMEM DOWN_BUTTON = 16;
-const short PROGMEM UP_BUTTON = 15;
-const short PROGMEM BATT_READ = A6;
-const short PROGMEM VIBRATE_PIN = 10;
-const short PROGMEM CHARGING_STATUS_PIN = 9;
+const int PROGMEM OK_BUTTON = 17;
+const int PROGMEM DOWN_BUTTON = 16;
+const int PROGMEM UP_BUTTON = 15;
+const int PROGMEM BATT_READ = A6;
+const int PROGMEM VIBRATE_PIN = 10;
+const int PROGMEM CHARGING_STATUS_PIN = 9;
 
 //navigation constants
-const short PROGMEM HOME_PAGE = 0;
-const short PROGMEM NOTIFICATION_MENU = 1;
-const short PROGMEM NOTIFICATION_BIG = 2;
-const short PROGMEM TIMER = 4;
-const short PROGMEM SETTINGS = 5;
-const short PROGMEM ALARM_PAGE = 6;
+const int PROGMEM HOME_PAGE = 0;
+const int PROGMEM NOTIFICATION_MENU = 1;
+const int PROGMEM NOTIFICATION_BIG = 2;
+const int PROGMEM TIMER = 4;
+const int PROGMEM SETTINGS = 5;
+const int PROGMEM ALARM_PAGE = 6;
 
-const short PROGMEM ALERT = 10;
+const int PROGMEM ALERT = 10;
 
 //UI constants
-const short PROGMEM MENU_ITEM_HEIGHT = 16;
-const short PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions
+const int PROGMEM MENU_ITEM_HEIGHT = 16;
+const int PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions
 
 //navigation vars
-short pageIndex = 0;
-short menuSelector = 0;
-short widgetSelector = 0;
-const short numberOfNormalWidgets = 6; // actually 3, 0,1,2.
-const short numberOfDebugWidgets = 1;
-short numberOfWidgets = 0;
-short numberOfPages = 6; // actually 7 (0-6 = 7)
+int pageIndex = 0;
+int menuSelector = 0;
+int widgetSelector = 0;
+const int numberOfNormalWidgets = 6; // actually 3, 0,1,2.
+const int numberOfDebugWidgets = 1;
+int numberOfWidgets = 0;
+int numberOfPages = 6; // actually 7 (0-6 = 7)
 
-const short x = 6;
-short y = 0;
-short Y_OFFSET = 0;
+const int x = 6;
+int y = 0;
+int Y_OFFSET = 0;
 
-short lineCount = 0;
-short currentLine = 0;
+int lineCount = 0;
+int currentLine = 0;
 
 //batt monitoring
 float batteryVoltage = 0;
-short batteryPercentage = 0;
+int batteryPercentage = 0;
 bool isCharging = false;
-bool prevIsCharging = false;
+bool voltageReached = false; // we determine this by seeing if the batt percent is over 95% and isCharging is false
+const int BATT_CHARGED_THRESHOLD = 95;
+const int BATT_CURRENT_CHARGE_TIME = 720; // 12 min charge intervals
 bool isCharged = false;
-bool started = false; //flag to identify whether its the start or the end of a charge cycle
-
+int chargeCurrentTimer = 0;
 
 //timer variables
-short timerArray[3] = {0,0,0}; // h/m/s
+int timerArray[3] = {0,0,0}; // h/m/s
 bool isRunning = false;
-short timerIndex = 0;
+int timerIndex = 0;
 
 
 bool locked = false;
 
 //connection
 bool isConnected = false;
-short connectedTime = 0;
+int connectedTime = 0;
 
 //settings
-const short numberOfSettings = 2;
+const int numberOfSettings = 2;
 String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget:","Debug Widgets:"};
-const short PROGMEM settingValueMin[numberOfSettings] = {0,0};
-const short PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,1};
-short settingValue[numberOfSettings] = {0,0}; //default
+const int PROGMEM settingValueMin[numberOfSettings] = {0,0};
+const int PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,1};
+int settingValue[numberOfSettings] = {0,0}; //default
 
 //alert popup
-short lastPage = -1;
+int lastPage = -1;
 char alertText[20]; //20 chars that fit
-short alertTextLen = 0;
-short alertVibrationCount = 0;
+int alertTextLen = 0;
+int alertVibrationCount = 0;
 bool vibrating = false;
 long prevAlertMillis = 0;
 
@@ -273,25 +272,27 @@ const byte PROGMEM BLUETOOTH_CONNECTED[] = {
    0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
 };
 
-short loading = 3; // time the loading screen is show for
+int loading = 3; // time the loading screen is show for
 
 //drawing buffers used for character rendering
-char numberBuffer[3]; //2 numbers //cahnged to 3 till i find what is taking 3 digits and overflowing
-const short charsThatFit = 20; //only with default font. 0-20 = 21 chars
+char numberBuffer[2]; //2 numbers
+const int charsThatFit = 20; //only with default font. 0-20 = 21 chars
 char lineBuffer[21]; // 21 chars                             ^^
-short charIndex = 0;
+int charIndex = 0;
 
 //alarm vars
 bool activeAlarms[2] = {false,false};
-short alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
-const short PROGMEM alarmMaxValues[3] = {23,59,6};
+int alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
+const int PROGMEM alarmMaxValues[3] = {23,59,6};
 short alarmToggle = 0; // alarm1 = 0, alarm2 = 1
 short prevAlarmToggle = 1;
-short alarmIndex = 0;
-const short ALARM_ADDRESS = 20;//start at 30, each alarm has 4 stored values, active,hours,mins,dateDay
+int alarmIndex = 0;
+const int ALARM_ADDRESS = 20;//start at 30, each alarm has 4 stored values, active,hours,mins,dateDay
 
 //used for power saving
 bool idle = false;
+bool sleeping = false;
+SnoozeBlock config;
 
 //Logo for loading
 const byte PROGMEM LOGO[] = {
@@ -308,11 +309,6 @@ const byte PROGMEM CHARGING[] = {
    0x1e, 0x02, 0x18, 0x1e, 0x10, 0x02, 0xf0, 0x03, 0x00, 0x00, 0x00, 0x00
 };
 
-const byte PROGMEM CHARGED[] = {
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x0f, 0x24, 0x09, 0x24, 0x19,
-   0x24, 0x19, 0x24, 0x09, 0xfc, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
- };
-
 void setup(void) {
   Serial.begin(9600);
   HWSERIAL.begin(9600);
@@ -322,17 +318,17 @@ void setup(void) {
   pinMode(UP_BUTTON,INPUT_PULLUP);
 
   pinMode(BATT_READ,INPUT);
-  pinMode(CHARGING_STATUS_PIN,INPUT_PULLUP);
+  pinMode(CHARGING_STATUS_PIN,INPUT);
   pinMode(VIBRATE_PIN,OUTPUT);
 
   u8g_prepare();
 
-  for(short i = 0; i < numberOfSettings; i++){
+  for(int i = 0; i < numberOfSettings; i++){
     settingValue[i] = readFromEEPROM(i);
   }
 
   //eeprom reset
-  /*for(short j=0; j < EEPROM.length(); j ++){
+  /*for(int j=0; j < EEPROM.length(); j ++){
     saveToEEPROM(j,0);
   }*/
 
@@ -350,6 +346,9 @@ void setup(void) {
 
   HWSERIAL.print("AT");
 
+  config.pinMode(CHARGING_STATUS_PIN, INPUT, FALLING);
+  config.setTimer(5000);// milliseconds
+
   Serial.println(F("MabezWatch OS Loaded!"));
 }
 
@@ -362,9 +361,9 @@ void u8g_prepare(void) {
 * Draw generic menu method
 */
 
-void showMenu(short numberOfItems,void itemInMenuFunction(short),bool showSelector){
-  for(short i=0; i < numberOfItems + 1;i++){
-    short startY = 0;
+void showMenu(int numberOfItems,void itemInMenuFunction(int),bool showSelector){
+  for(int i=0; i < numberOfItems + 1;i++){
+    int startY = 0;
     if(i==menuSelector && showSelector){
         u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
@@ -402,26 +401,32 @@ void updateSystem(){
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
     batteryPercentage = ((batteryVoltage - 3)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts
-    isCharging = !digitalRead(CHARGING_STATUS_PIN);
-
-    if((isCharging != prevIsCharging)){
-      if(started){ //flag to find if its the start or the end of a charge
-        isCharged = true;
-        started = false;
-      } else {
-        started = true;
-      }
-      prevIsCharging = isCharging;
-    } else if(batteryPercentage <= 95 && isCharged){ //reset the charged flag
-      isCharged = false;
-    }
-
+    isCharging = digitalRead(CHARGING_STATUS_PIN);
     //make sure we never display a negative percentage
     if(batteryPercentage < 0){
       batteryPercentage = 0;
     } else if(batteryPercentage > 100){
       batteryPercentage = 100;
     }
+
+
+    if(digitalRead(CHARGING_STATUS_PIN) && !isCharged){
+      sleeping = true;
+      isCharged = false;
+    }
+
+    if(sleeping){
+      int who = Snooze.deepSleep( config );// return module that woke processor
+      Serial.println("Who : "+who);
+      if(who == CHARGING_STATUS_PIN){
+        createAlert("Charged",7,10);
+        isCharged = true;
+        sleeping = false;
+      }
+    }
+   
+
+    
 
     //check if we have space for new notifications
     if(notificationIndex < (notificationMax - 4) && !wantNotifications){
@@ -485,6 +490,7 @@ void updateSystem(){
     Serial.print("Idle power save: ");
     if(idle){
       Serial.println("Active");
+      Snooze.idle();
     } else {
       Serial.println("Not Active");
     }
@@ -532,7 +538,7 @@ void updateSystem(){
     HWSERIAL.print(",");
     HWSERIAL.print(batteryVoltage);
     HWSERIAL.print(",");
-    HWSERIAL.print(isCharging);
+    HWSERIAL.print(chargeCurrentTimer);
   }
 
   if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
@@ -555,11 +561,19 @@ void updateSystem(){
 */
 
 void loop(void) {
+  tick();
+}
+
+void tick(){
   u8g_FirstPage(&u8g);
   do {
     if(loading !=0){
       u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
       u8g_DrawStr(&u8g,42,55,"Loading...");
+    } else if(sleeping){
+      digitalClockWidget();
+    } else if(isCharged){
+      u8g_DrawStr(&u8g,83,28+14,"DONE");
     } else {
       switch(pageIndex){
         case 0: homePage(clockArray[0],clockArray[1],clockArray[2]); break;
@@ -589,7 +603,7 @@ void loop(void) {
   if(!HWSERIAL.available()){
     if(messageIndex > 0){
       Serial.print(F("Message: "));
-      for(short i=0; i < messageIndex; i++){
+      for(int i=0; i < messageIndex; i++){
         Serial.print(message[i]);
       }
       Serial.println();
@@ -623,15 +637,15 @@ void loop(void) {
       }else if((messageIndex < 2) && receiving){//doesn't contain a full tag and we are receiving
         //store this message and combine the next one and check if it equals <f>
         if(!checkingTag){
-          for(short j = 0; j < messageIndex; j++){
+          for(int j = 0; j < messageIndex; j++){
             messageBuffer[j] = message[j];
           }
           checkingTag = true;
         } else {
-          short currentAmount = sizeof(messageBuffer);
+          int currentAmount = sizeof(messageBuffer);
           if((currentAmount + (messageIndex + 1)) == 3){ //make sure it's a tag and it doesnt exceed the array index
             //we have found a tag
-            for(short k = (currentAmount - 1); k < (3 - (messageIndex + 1)); k++){
+            for(int k = (currentAmount - 1); k < (3 - (messageIndex + 1)); k++){
                 messageBuffer[k] = message[k];
             }
             //if its an <f> then we finish else we carry on
@@ -653,14 +667,14 @@ void loop(void) {
           messagePtr += 3;
           while(*messagePtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
             finalData[finalDataIndex] = *messagePtr; // *messagePtr derefereces the pointer so it points to the data
-            messagePtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
+            messagePtr++; // this increased the ptr location in this case by one, if it were an int array it would be by 4 to get the next element
             finalDataIndex++;
           }
           //reset the messagePtr once done
           messagePtr = message;
         } else {
-          if(!((finalDataIndex+messageIndex) >= 249)){ //check the data will fit short he char array
-            for(short i=0; i < messageIndex; i++){
+          if(!((finalDataIndex+messageIndex) >= 249)){ //check the data will fit int he char array
+            for(int i=0; i < messageIndex; i++){
               finalData[finalDataIndex] = message[i];
               finalDataIndex++;
             }
@@ -720,8 +734,8 @@ void alarmPage(){
   intTo2Chars(alarmTime[1]);
   u8g_DrawStr(&u8g, 54,35,numberBuffer);
   //draw day of week set up to a week in advance
-  short dayAhead = dateArray[3] - 1; //set current day
-  for(short i = 0; i < alarmTime[2]; i++){ // add the exra days
+  int dayAhead = dateArray[3] - 1; //set current day
+  for(int i = 0; i < alarmTime[2]; i++){ // add the exra days
     dayAhead++;
     if(dayAhead > 6){
       dayAhead = 0;
@@ -730,10 +744,10 @@ void alarmPage(){
 
   //check if alarms are active
   if(alarmToggle!=prevAlarmToggle){
-    for(short k = 0; k < 2; k++){
+    for(int k = 0; k < 2; k++){
       alarmTime[k] = 0;
     }
-    short address = 0;
+    int address = 0;
     if(alarmToggle == 0 && activeAlarms[alarmToggle]){
       address = ALARM_ADDRESS + 1;
     } else if(alarmToggle == 1 && activeAlarms[alarmToggle]) {
@@ -743,9 +757,9 @@ void alarmPage(){
     address++;
     alarmTime[1] = readFromEEPROM(address);
     address++;
-    short date = readFromEEPROM(address);
+    int date = readFromEEPROM(address);
     address++;
-    short monthSet = readFromEEPROM(address);
+    int monthSet = readFromEEPROM(address);
     if(date == dateArray[0]){
       alarmTime[2] = 0;
     } else {
@@ -800,7 +814,7 @@ void timerPage(){
 
 }
 
-void drawSelectors(short index){
+void drawSelectors(int index){
   if(locked){
     switch (index) {
       case 0: drawTriangle(22,10,8,2); drawTriangle(22,38,8,1); break;
@@ -820,7 +834,7 @@ void drawSelectors(short index){
 
 void alertPage(){
   u8g_SetFont(&u8g, u8g_font_6x12);
-  short xOffset = (alertTextLen * 6)/2;
+  int xOffset = (alertTextLen * 6)/2;
   u8g_DrawStr(&u8g,64 - xOffset, 32,alertText);
   u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
   //remeber to add vibrate if needed
@@ -847,7 +861,7 @@ void settingsPage(){
   showMenu(numberOfSettings,settingsMenuItem,showCursor);
 }
 
-void notificationMenuPageItem(short position){
+void notificationMenuPageItem(int position){
   //draw title
   u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
 
@@ -862,17 +876,17 @@ void notificationMenuPageItem(short position){
   u8g_SetFont(&u8g, u8g_font_6x12);
 }
 
-void settingsMenuItem(short position){
+void settingsMenuItem(int position){
   u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
   u8g_DrawStr(&u8g,x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,itoa(settingValue[position],numberBuffer,10));
 }
 
 
-void notificationFullPage(short chosenNotification){
-  short lines = 0;
+void notificationFullPage(int chosenNotification){
+  int lines = 0;
   charIndex = 0; //make sure we rest index
 
-  short textLength = notifications[chosenNotification].textLength;
+  int textLength = notifications[chosenNotification].textLength;
   /*char *ptr = notifications[chosenNotification].text;
   while(*ptr != '\0'){
     textLength++;
@@ -880,7 +894,7 @@ void notificationFullPage(short chosenNotification){
   }*/
 
   if(textLength > charsThatFit){
-    for(short i=0; i < textLength; i++){
+    for(int i=0; i < textLength; i++){
       if((charIndex >= charsThatFit) || i == (textLength - 1)){ // i == textLength so we catch what we ahve of a line if we dont have a complete line
         lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
         u8g_DrawStr(&u8g,0,lines * 10 + FONT_HEIGHT + Y_OFFSET, lineBuffer); //draw the line
@@ -902,7 +916,7 @@ void notificationFullPage(short chosenNotification){
   u8g_DrawStr(&u8g, 30, 50, String(textLength).c_str());
 }
 
-void homePage(short hour, short minute,short second){
+void homePage(int hour, int minute,int second){
   u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
   u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
   u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
@@ -918,18 +932,18 @@ void homePage(short hour, short minute,short second){
 
 
   float hours = (((hour * 30) + ((minute/2))) * (PI/180));
-  short x2 = 32 + (sin(hours) * (clockRadius/2));
-  short y2 = 32 - (cos(hours) * (clockRadius/2));
+  int x2 = 32 + (sin(hours) * (clockRadius/2));
+  int y2 = 32 - (cos(hours) * (clockRadius/2));
   u8g_DrawLine(&u8g,32,32,x2,y2); //hour hand
 
   float minutes = ((minute * 6) * (PI/180));
-  short xx2 = 32 + (sin(minutes) * (clockRadius/1.4));
-  short yy2 = 32 - (cos(minutes) * (clockRadius/1.4));
+  int xx2 = 32 + (sin(minutes) * (clockRadius/1.4));
+  int yy2 = 32 - (cos(minutes) * (clockRadius/1.4));
   u8g_DrawLine(&u8g,32,32,xx2,yy2);//minute hand
 
   float seconds = ((second * 6) * (PI/180));
-  short xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
-  short yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
+  int xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
+  int yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
   u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
 
   if(settingValue[1] == 1){
@@ -963,12 +977,15 @@ void homePage(short hour, short minute,short second){
   //battery voltage
   if(!isCharging && !isCharged){
     if(batteryPercentage != 100){
-      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
+      char temp[3];
+      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,temp,10));
       u8g_DrawStr(&u8g,89,11,"%");
+    } else {
+      u8g_DrawStr(&u8g,77,11,itoa(100,numberBuffer,10)); //atm we are just drawing without the percentage
     }
   } else if(isCharged){
-    //fully charged symbol here
-    u8g_DrawXBMP(&u8g,79,1,14,12,CHARGED);
+    //need draw something here to signify we are fully charged
+    
   } else {
     //draw symbol to show that we are charging here
     u8g_DrawXBMP(&u8g,80,2,14,12,CHARGING);
@@ -1030,10 +1047,10 @@ void weatherWidget(){
     u8g_DrawStr(&u8g,72,28+FONT_HEIGHT,weatherTemperature);
     u8g_DrawStr(&u8g,102,28+FONT_HEIGHT,"C");
 
-    short index = 0;
+    int index = 0;
     charIndex = 0;
     if(contains(weatherForecast,' ',sizeof(weatherForecast))){
-      for(short i=0; i < sizeof(weatherForecast); i++){
+      for(int i=0; i < sizeof(weatherForecast); i++){
         if(weatherForecast[i]==' ' || weatherForecast[i] == 0){ // == 0  find the end of the data
           u8g_DrawStr(&u8g,72,(38+FONT_HEIGHT) + (index * 10),lineBuffer);//draw it
           index++;
@@ -1066,7 +1083,7 @@ void weatherWidget(){
 */
 
 void handleInput(){
-  short  vector = getConfirmedInputVector();
+  int  vector = getConfirmedInputVector();
     if(vector!=lastVector){
       if (vector == UP_DOWN){
         Serial.println(F("Dual click detected!"));
@@ -1154,7 +1171,7 @@ void handleUpInput(){
   }
 }
 
-void menuUp(short size){
+void menuUp(int size){
   menuSelector++;
   //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
   if((menuSelector >= 4) && (((size + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
@@ -1323,14 +1340,14 @@ void handleOkInput(){
   }
 }
 
-short getConfirmedInputVector()
+int getConfirmedInputVector()
 {
-  static short lastConfirmedVector = 0;
-  static short lastVector = -1;
+  static int lastConfirmedVector = 0;
+  static int lastVector = -1;
   static long unsigned int heldVector = 0L;
 
   // Combine the inputs.
-  short rawVector =
+  int rawVector =
     isButtonPressed(OK_BUTTON) << 2 |
     isButtonPressed(DOWN_BUTTON) << 1 |
     isButtonPressed(UP_BUTTON) << 0;
@@ -1367,12 +1384,12 @@ short getConfirmedInputVector()
 * Data Proccessing methods.
 */
 
-void getWeatherData(char weatherItem[],short len){
+void getWeatherData(char weatherItem[],int len){
   char *weaPtr = weatherItem;
   weaPtr+=3; //remove the tag
-  short charIndex = 0;
-  short index = 0;
-  for(short i=0; i < len;i++){
+  int charIndex = 0;
+  int index = 0;
+  for(int i=0; i < len;i++){
     char c = *weaPtr; //derefence pointer to get value in char[]
     if(c=='<'){
       //split the t and more the next item
@@ -1399,19 +1416,19 @@ void getWeatherData(char weatherItem[],short len){
   Serial.println(weatherTemperature);
   Serial.print(F("Forecast: "));
   Serial.println(weatherForecast);
-  for(short l=0; l < 2; l++){
+  for(int l=0; l < 2; l++){
     timeWeGotWeather[l] = clockArray[l];
   }
   weatherData = true;
 }
 
-void getNotification(char notificationItem[],short len){
+void getNotification(char notificationItem[],int len){
   //split the <n>
   char *notPtr = notificationItem;
   notPtr+=3; //'removes' the first 3 characters
-  short index = 0;
-  short charIndex = 0;
-  for(short i=0; i < len;i++){
+  int index = 0;
+  int charIndex = 0;
+  for(int i=0; i < len;i++){
     char c = *notPtr; //dereferences point to find value
     if(c=='<'){
       //split the i and more the next item
@@ -1449,17 +1466,17 @@ void getNotification(char notificationItem[],short len){
 
 
 
-void getTimeFromDevice(char message[], short len){
+void getTimeFromDevice(char message[], int len){
   //sample data
   //<d>24 04 2016 17:44:46
   Serial.print(F("Date data: "));
   Serial.println(message);
   char buf[4];//max 2 chars
-  short charIndex = 0;
-  short dateIndex = 0;
-  short clockLoopIndex = 0;
+  int charIndex = 0;
+  int dateIndex = 0;
+  int clockLoopIndex = 0;
      bool gotDate = false;
-     for(short i = 3; i< len;i++){ // i = 3 skips first 3 chars
+     for(int i = 3; i< len;i++){ // i = 3 skips first 3 chars
       if(!gotDate){
        if(message[i]==' '){
           dateArray[dateIndex] = atoi(buf);
@@ -1477,7 +1494,7 @@ void getTimeFromDevice(char message[], short len){
        }
       } else {
         if(message[i]==':'){
-            clockArray[clockLoopIndex] = atoi(buf); //ascii to short
+            clockArray[clockLoopIndex] = atoi(buf); //ascii to int
             charIndex = 0;
             clockLoopIndex++;
         } else {
@@ -1504,8 +1521,8 @@ void getTimeFromDevice(char message[], short len){
 * System methods
 */
 
-void setAlarm(short alarmType, short hours, short minutes, short date,short month){
-  short start = 0;
+void setAlarm(int alarmType, int hours, int minutes, int date,int month){
+  int start = 0;
   if(alarmType == 0){
     RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
     Serial.println("ALARM1 Set!");
@@ -1528,11 +1545,11 @@ void setAlarm(short alarmType, short hours, short minutes, short date,short mont
   saveToEEPROM(start,month);
 }
 
-void createAlert(char text[],short len, short vibrationTime){
+void createAlert(char text[],int len, int vibrationTime){
   if(len < 20){
     lastPage = pageIndex;
     alertTextLen = len;
-    for(short i =0; i < len; i++){
+    for(int i =0; i < len; i++){
       alertText[i] = text[i];
     }
     vibrate(vibrationTime);
@@ -1542,21 +1559,21 @@ void createAlert(char text[],short len, short vibrationTime){
   }
 }
 
-void vibrate(short vibrationTime){
+void vibrate(int vibrationTime){
   alertVibrationCount = (vibrationTime) * 2;// double it as we toggle vibrate twice a second
 }
 
-void saveToEEPROM(short address,short value){
+void saveToEEPROM(int address,int value){
   if(address < EEPROM.length()){
     EEPROM.write(address,value);
   }
 }
 
-short readFromEEPROM(short address){
+int readFromEEPROM(int address){
     return EEPROM.read(address);
 }
 
-void drawTriangle(short x, short y, short size, short direction){
+void drawTriangle(int x, int y, int size, int direction){
   // some triangle are miss-shapen need to fix
   switch (direction) {
     case 1: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); break; //down
@@ -1566,7 +1583,7 @@ void drawTriangle(short x, short y, short size, short direction){
   }
 }
 
-void setClockTime(short hours,short minutes,short seconds, short days, short months, short years){
+void setClockTime(int hours,int minutes,int seconds, int days, int months, int years){
   tm.Hour = hours;
   tm.Minute = minutes;
   tm.Second = seconds;
@@ -1599,7 +1616,7 @@ void resetTransmissionVariables(){
   readyToProcess = false;
 }
 
-void removeNotification(short pos){
+void removeNotification(int pos){
   if ( pos >= notificationIndex + 1 ){
     Serial.println(F("Can't delete notification."));
   } else {
@@ -1607,7 +1624,7 @@ void removeNotification(short pos){
     memset(notifications[pos].text,0,sizeof(notifications[pos].text));
     memset(notifications[pos].title,0,sizeof(notifications[pos].title));
     memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
-    for ( short c = pos ; c < (notificationIndex - 1) ; c++ ){
+    for ( int c = pos ; c < (notificationIndex - 1) ; c++ ){
        notifications[c] = notifications[c+1];
     }
     Serial.print(F("Removed notification at position: "));
@@ -1623,7 +1640,7 @@ float getBatteryVoltage(){
    * and will destroy the teensy in a worst case.
    */
    float reads = 0;
-   for(short i=0; i<100; i++){
+   for(int i=0; i<100; i++){
     reads+= analogRead(BATT_READ);
    }
    // R1 = 2000, R2 = 3300
@@ -1635,7 +1652,7 @@ float getBatteryVoltage(){
 * Utility methods
 */
 
-void intTo2Chars(short number){
+void intTo2Chars(int number){
   memset(numberBuffer,0,sizeof(numberBuffer));
   if(number < 10){
     //not working atm
@@ -1647,8 +1664,8 @@ void intTo2Chars(short number){
   }
 }
 
-bool startsWith(char data[], char charSeq[], short len){
-    for(short i=0; i < len; i++){
+bool startsWith(char data[], char charSeq[], int len){
+    for(int i=0; i < len; i++){
       if(!(data[i]==charSeq[i])){
         return false;
       }
@@ -1656,8 +1673,8 @@ bool startsWith(char data[], char charSeq[], short len){
     return true;
 }
 
-bool contains(char data[], char character, short lenOfData){
-  for(short i = 0; i < lenOfData; i++){
+bool contains(char data[], char character, int lenOfData){
+  for(int i = 0; i < lenOfData; i++){
     if(data[i] == character){
       return true;
     }
@@ -1665,7 +1682,7 @@ bool contains(char data[], char character, short lenOfData){
   return false;
 }
 
-short FreeRam() {
+int FreeRam() {
   char top;
   #ifdef __arm__
     return &top - reinterpret_cast<char*>(sbrk(0));

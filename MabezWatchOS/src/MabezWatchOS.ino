@@ -108,6 +108,8 @@ u8g_t u8g;
           so clock down to 8mhz or something when we havent't interacted with the watch, then ramp up when we are interacting, but this will cause problems with serial comms I think
       - add software turn on/off?
           - instead of actually powering off, hibernate (using snooze lib), in this mode we will only draw micro amps, add interrupt on the OK button to wake up
+          - hibernate current = 240/0.344 = 697 Hours, need to power BT moudle from a pin, and turn off before going into low power, also blank the oled so no current draw there
+             - bt module draws about 7.5  ma, so we need as high current pin, probably pin 5
       - add hardware power on/off
 
 
@@ -201,6 +203,7 @@ const short PROGMEM UP_BUTTON = 15;
 const short PROGMEM BATT_READ = A6;
 const short PROGMEM VIBRATE_PIN = 10;
 const short PROGMEM CHARGING_STATUS_PIN = 9;
+const short PROGMEM BT_POWER = 21; // pin 5 is broken, need to reflow? as voltage is only 1.3v
 
 //navigation constants
 const short PROGMEM HOME_PAGE = 0;
@@ -323,7 +326,12 @@ void setup(void) {
 
   pinMode(BATT_READ,INPUT);
   pinMode(CHARGING_STATUS_PIN,INPUT_PULLUP);
+
+  pinMode(BT_POWER,OUTPUT);
   pinMode(VIBRATE_PIN,OUTPUT);
+
+  //turn on BT
+  digitalWrite(BT_POWER, HIGH);
 
   u8g_prepare();
 

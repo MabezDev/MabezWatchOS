@@ -113,10 +113,12 @@ u8g_t u8g;
           so clock down to 8mhz or something when we havent't interacted with the watch, then ramp up when we are interacting, but this will cause problems with serial comms I think
       - add software turn on/off? - [DONE]
           - instead of actually powering off, hibernate (using snooze lib), in this mode we will only draw micro amps, add interrupt on the OK button to wake up
-          - hibernate current = 240/0.344 = 697 Hours, need to power BT moudle from a pin, and turn off before going into low power, also blank the oled so no current draw there
+          - hibernate current = 240/0.344 = 697 Hours, need to power BT moudle from a pin, and turn off before going into low power, also blank the oled so no current draw there -[DONE]
              - bt module draws about 7.5  ma, so we need as high current pin, probably pin 5
-      - add hardware power on/off
+      - add hardware power on/off [OPTIONAL]
+      - add hardware reset - [NOT POSSIBLE] instead we added the watch dog timer, to reset the teensy in software if our program hangs
       - sort notification index so it starts at -1 and goes to 0 (still display zero), as we are wasting a notification in the array which could save us about 200 bytes
+      -
 
 
  */
@@ -209,7 +211,7 @@ const short PROGMEM UP_BUTTON = 15;
 const short PROGMEM BATT_READ = A6;
 const short PROGMEM VIBRATE_PIN = 10;
 const short PROGMEM CHARGING_STATUS_PIN = 9;
-const short PROGMEM BT_POWER = 21; // pin 5 is broken, need to reflow? as voltage is only 1.3v
+const short PROGMEM BT_POWER = 21; // pin 5 is broken, need to reflow? as voltage is only 1.3v so using pin 21
 
 //navigation constants
 const short PROGMEM HOME_PAGE = 0;
@@ -218,6 +220,7 @@ const short PROGMEM NOTIFICATION_BIG = 2;
 const short PROGMEM TIMER = 4;
 const short PROGMEM SETTINGS = 5;
 const short PROGMEM ALARM_PAGE = 6;
+const short PROGMEM SHUTDOWN = 7;
 
 const short PROGMEM ALERT = 10;
 
@@ -251,6 +254,7 @@ bool started = false; //flag to identify whether its the start or the end of a c
 
 bool shutdown = false;
 bool readyForShutdown = false;
+short shutDownCounter = -1; // when we free up some space add a page to count down till shutdown, allowing the shutdown to be cancelled
 
 
 //timer variables
@@ -280,11 +284,6 @@ short alertVibrationCount = 0;
 bool vibrating = false;
 long prevAlertMillis = 0;
 
-//icons
-const byte PROGMEM BLUETOOTH_CONNECTED[] = {
-   0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
-};
-
 short loading = 3; // time the loading screen is show for
 
 //drawing buffers used for character rendering
@@ -303,7 +302,7 @@ short alarmIndex = 0;
 const short ALARM_ADDRESS = 20;//start at 30, each alarm has 4 stored values, active,hours,mins,dateDay
 
 //used for power saving
-bool idle = false;
+//bool idle = false;
 
 //Logo for loading
 const byte PROGMEM LOGO[] = {
@@ -313,6 +312,11 @@ const byte PROGMEM LOGO[] = {
    0x0e, 0x1b, 0x0e, 0x0e, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e,
    0x0e, 0x0e, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e,
    0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x0e, 0x00, 0x0e, 0x00, 0x00, 0x00
+};
+
+//icons
+const byte PROGMEM BLUETOOTH_CONNECTED[] = {
+   0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
 };
 
 const byte PROGMEM CHARGING[] = {
@@ -450,7 +454,7 @@ void updateSystem(){
     }
 
     //loading screen counter
-    if(loading!=0){
+    if(loading > 0){
       loading--;
     }
 
@@ -473,6 +477,12 @@ void updateSystem(){
           }
         }
       }
+    }
+
+    if(shutDownCounter > 0){
+      shutDownCounter--;
+    } else if(shutDownCounter == 0) {
+      shutdown = true;
     }
 
     //check and prepare for shutdown
@@ -514,12 +524,12 @@ void updateSystem(){
       Serial.println("Running down");
     }
 
-    Serial.print("Idle power save: ");
+    /*Serial.print("Idle power save: ");
     if(idle){
       Serial.println("Active");
     } else {
       Serial.println("Not Active");
-    }
+    }*/
 
     Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
@@ -586,13 +596,10 @@ void updateSystem(){
 * Main Loop
 */
 
-void loop(void) {
-  // service the COP, if our program gets stuck and this is never called, we reset the teensy
-  SIM_SRVCOP = 0x55;
-  SIM_SRVCOP = 0xAA;
+void loop(void) {                                                                                   
   u8g_FirstPage(&u8g);
   do {
-    if(loading !=0){
+    if(loading > 0){ // make sure we dont miss the 0
       u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
       u8g_DrawStr(&u8g,42,55,"Loading...");
     } else if(!shutdown){
@@ -603,6 +610,7 @@ void loop(void) {
         case 4: timerPage(); break;
         case 5: settingsPage(); break;
         case 6: alarmPage(); break;
+        case 7: shutDownPage(); break;
         case 10: alertPage(); break;
       }
     }
@@ -739,6 +747,10 @@ void loop(void) {
   }
   // update the system
   updateSystem();
+
+  // service the COP // if we don't update this the wacthdog will reset our teensy (For hangs and crashes)
+  SIM_SRVCOP = 0x55;
+  SIM_SRVCOP = 0xAA;
 }
 
 /*
@@ -808,6 +820,16 @@ void alarmPage(){
 
 
   drawSelectors(alarmIndex);
+}
+
+void shutDownPage(){
+  u8g_SetFont(&u8g, u8g_font_6x12);
+  u8g_DrawStr(&u8g,25,1 + FONT_HEIGHT,"Shutting Down");
+  u8g_DrawStr(&u8g,30,14 + FONT_HEIGHT,"in");
+  intTo2Chars(shutDownCounter);
+  u8g_DrawStr(&u8g,45,14 + FONT_HEIGHT,numberBuffer);
+  u8g_DrawStr(&u8g,60,14 + FONT_HEIGHT,"seconds");
+  u8g_DrawStr(&u8g,10,35 + FONT_HEIGHT,"Press OK to cancel!");
 }
 
 void timerPage(){
@@ -908,11 +930,6 @@ void notificationFullPage(short chosenNotification){
   charIndex = 0; //make sure we rest index
 
   short textLength = notifications[chosenNotification].textLength;
-  /*char *ptr = notifications[chosenNotification].text;
-  while(*ptr != '\0'){
-    textLength++;
-    ptr++;
-  }*/
 
   if(textLength > charsThatFit){
     for(short i=0; i < textLength; i++){
@@ -979,10 +996,10 @@ void homePage(short hour, short minute,short second){
     case 2: weatherWidget(); break;
     case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
     case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
-    case 7: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 8: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,75,42 + 3,"Shut down"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 6: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 7: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
+    case 8: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,75,42 + 3,"Shut down"); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -1119,7 +1136,7 @@ void handleInput(){
         widgetSelector = settingValue[0];// and our fav widget
       }
       prevButtonPressed = millis();
-      idle = false;
+      //idle = false;
     }
       if(vector == NONE_OF_THEM){
         if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
@@ -1129,7 +1146,7 @@ void handleInput(){
           widgetSelector = settingValue[0]; //and our fav widget
           Y_OFFSET = 0;// reset the Y_OFFSET so if we come off a page with an offset it doesnt get bugged
           currentLine = 0;
-          idle = true;
+          //idle = true;
         }
       }
     lastVector = vector;
@@ -1140,7 +1157,7 @@ void handleDualClick(){
 }
 
 void handleUpInput(){
-  Serial.println(F("Up Click Detected"));
+  Serial.println(F("Increase Click Detected"));
   if(pageIndex == HOME_PAGE){
     widgetSelector++;
     if(widgetSelector > numberOfWidgets){
@@ -1216,7 +1233,7 @@ void menuDown(){
 }
 
 void handleDownInput(){
-  Serial.println(F("Down Click Detected"));
+  Serial.println(F("Decrease Click Detected"));
   if(pageIndex == HOME_PAGE){
     widgetSelector--;
     if(widgetSelector < 0){
@@ -1275,13 +1292,14 @@ void handleOkInput(){
     } else if(widgetSelector == 4){
       pageIndex = TIMER;
     } else if(widgetSelector == 5){
-      pageIndex = SETTINGS;
-    } else if(widgetSelector == 6){
-        resetBTModule();
-    } else if(widgetSelector == 7){
       pageIndex = ALARM_PAGE;
+    } else if(widgetSelector == 6){
+      pageIndex = SETTINGS;
+    } else if(widgetSelector == 7){
+      resetBTModule();
     } else if(widgetSelector == 8){
-      shutdown = true;
+      shutDownCounter = 10; // 5 seconds to decide
+      pageIndex = SHUTDOWN;
     }
     Y_OFFSET = 0;
   } else if(pageIndex == NOTIFICATION_MENU){
@@ -1355,6 +1373,9 @@ void handleOkInput(){
    } else {
      locked = !locked;
    }
+  } else if(pageIndex == SHUTDOWN){
+    shutDownCounter = -1;
+    pageIndex = HOME_PAGE;
   } else {
     Serial.println(F("Unknown Page."));
   }
@@ -1546,13 +1567,14 @@ void shutDown(){
   digitalWrite(BT_POWER,LOW); // turn off BT module
   isConnected = false;
   // clear screen so it draws no power
-  int whatPin = Snooze.deepSleep(config);
+  int whatPin = Snooze.deepSleep(config); //change to hibernate?
   delay(500);
   if(whatPin == 37){ // 37 is the TSI detected number
     digitalWrite(BT_POWER,HIGH);
     //everything in ram is kept so we must reset the flags on wake up
     shutdown = false;
     readyForShutdown = false;
+    shutDownCounter = -1;
     loading = 3;
   }
 }
@@ -1688,7 +1710,6 @@ float getBatteryVoltage(){
 void intTo2Chars(short number){
   memset(numberBuffer,0,sizeof(numberBuffer));
   if(number < 10){
-    //not working atm
     numberBuffer[0] = '0';
     numberBuffer[1] = (number + 48);
 
@@ -1723,3 +1744,13 @@ short FreeRam() {
     return __brkval ? &top - __brkval : &top - &__bss_end;
   #endif  // __arm__
 }
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void startup_early_hook() {
+  // empty
+}
+#ifdef __cplusplus
+}
+#endif

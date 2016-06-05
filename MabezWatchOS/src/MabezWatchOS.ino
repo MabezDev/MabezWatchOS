@@ -409,7 +409,8 @@ void updateSystem(){
 
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
-    batteryPercentage = ((batteryVoltage - 3)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts
+    batteryPercentage = ((batteryVoltage - 3.4)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts, after testing the cut off voltage is 3.4v
+                                                          // in furutire shout change to 3.5 and when we get to 0% "Shutdown" (deep sleep)
     isCharging = !digitalRead(CHARGING_STATUS_PIN);
 
     if((isCharging != prevIsCharging)){

@@ -12,7 +12,7 @@ void setup() {
 }
 
 void loop() {
-  int whatPin = Snooze.hibernate(config);
+  int whatPin = Snooze.deepSleep(config);
   if(whatPin == 37){ // 37 is the TSI detected number
     delay(1000);
     digitalWrite(LED_BUILTIN,HIGH);

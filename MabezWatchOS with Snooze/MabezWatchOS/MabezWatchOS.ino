@@ -1,30 +1,5 @@
-#include <Arduino.h>
-
-#include <u8g_i2c.h>
-#include <i2c_t3.h>
-#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
-#include <EEPROM.h>
-#include <Time.h>
-#include <Snooze.h>
-
-#define HWSERIAL Serial1
-
-SnoozeBlock config;
-
-//needed for calculating Free RAM on ARM based MC's
-#ifdef __arm__
-  extern "C" char* sbrk(short incr);
-#else  // __ARM__
-  extern char *__brkval;
-  extern char __bss_end;
-#endif  // __arm__
-
-//u8g lib object without the c++ wrapper due to lack of support of the OLED
-u8g_t u8g;
-
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm.
-
    Currently with no power saving techniques the whole thing runs on just 28millisamps, therfore
         240 mah battery / 28ma current draw = 8.5 hours of on time
    Battery Update: Left to discharge whilst connected to the App, we got 8 hours and 22 minutes, very close to the 8 hours 30mins we calculated
@@ -55,8 +30,8 @@ u8g_t u8g;
     
  *
  *  Buglist:
-    -midnight on the digital clock widget produces three zeros must investigate
-        - might be due to the fact a itoa func make a number wwith 3 characters (numberBuffer overflow)
+    - [MAJOR] DEEP SLEEP uses 37MA for some unknown reason, on an empty exmaple sketch with just sleep it works fine [FIXED]  
+              - Using hibernate and moving the pinMode Sleep block top the shutdown functions
  *
  *
  *  Todo:
@@ -115,13 +90,41 @@ u8g_t u8g;
           - instead of actually powering off, hibernate (using snooze lib), in this mode we will only draw micro amps, add interrupt on the OK button to wake up
           - hibernate current = 240/0.344 = 697 Hours, need to power BT moudle from a pin, and turn off before going into low power, also blank the oled so no current draw there -[DONE]
              - bt module draws about 7.5  ma, so we need as high current pin, probably pin 5
+          - cant use hibernate as it doesnt always wake up, using deep sleep which draws abaout 641 - 837 micro amps, 240/0.837 = 286 hours or 240/0.641 = 374 hours
+          - oled draws 300uA whith no pixles displayed, which we will have to live with as we dont have a pin that can source the display current
+          - RTC draws about 100uA, could turn off
+          - with this program loaded we use 2.26mA in deep sleep, 240 / 2.3 = 104 hours (4 days) if we unplug oled and plug back in we drop to the 0.7uA we are looking for 
+            need to find a way to reset the display
       - add hardware power on/off [OPTIONAL]
       - add hardware reset - [NOT POSSIBLE] instead we added the watch dog timer, to reset the teensy in software if our program hangs
       - sort notification index so it starts at -1 and goes to 0 (still display zero), as we are wasting a notification in the array which could save us about 200 bytes
       -
-
-
  */
+
+
+#include <Arduino.h>
+
+#include <u8g_i2c.h>
+#include <i2c_t3.h>
+#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
+#include <EEPROM.h>
+#include <Time.h>
+#include <Snooze.h>
+
+#define HWSERIAL Serial1
+
+SnoozeBlock config;
+
+//needed for calculating Free RAM on ARM based MC's
+#ifdef __arm__
+  extern "C" char* sbrk(short incr);
+#else  // __ARM__
+  extern char *__brkval;
+  extern char __bss_end;
+#endif  // __arm__
+
+//u8g lib object without the c++ wrapper due to lack of support of the OLED
+u8g_t u8g;
 
 //input vars
 bool button_ok = false;
@@ -200,7 +203,7 @@ typedef struct{
 //notification vars
 short notificationIndex = 0;
 short PROGMEM notificationMax = 10;
-Notification notifications[10];
+Notification notifications[10]; //reflect notification index to account for one less here
 bool wantNotifications = true;
 bool shouldRemove = false;
 
@@ -333,10 +336,6 @@ void setup(void) {
   Serial.begin(9600);
   HWSERIAL.begin(9600);
 
-  pinMode(OK_BUTTON,INPUT_PULLUP);
-  pinMode(DOWN_BUTTON,INPUT_PULLUP);
-  pinMode(UP_BUTTON,INPUT_PULLUP);
-
   pinMode(BATT_READ,INPUT);
   pinMode(CHARGING_STATUS_PIN,INPUT_PULLUP);
 
@@ -366,9 +365,7 @@ void setup(void) {
   analogReference(DEFAULT);
   analogReadResolution(10);// 2^10 = 1024
   analogReadAveraging(32);//smoothing
-
-  config.pinMode(DOWN_BUTTON, TSI, touchRead(DOWN_BUTTON) + 250);
-
+  
   //HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
 
   HWSERIAL.print("AT");
@@ -448,7 +445,7 @@ void updateSystem(){
 
     //check if we have space for new notifications
     if(notificationIndex < (notificationMax - 4) && !wantNotifications){
-      Serial.println("Ready to receive notifications.");
+      //Serial.println("Ready to receive notifications.");
       HWSERIAL.print("<n>");
       wantNotifications = true;
     }
@@ -498,7 +495,7 @@ void updateSystem(){
       }
     }
 
-    Serial.println(F("=============================================="));
+    /*Serial.println(F("=============================================="));
     if(isConnected){
       connectedTime++;
       Serial.print(F("Connected for "));
@@ -524,13 +521,6 @@ void updateSystem(){
       Serial.println("Running down");
     }
 
-    /*Serial.print("Idle power save: ");
-    if(idle){
-      Serial.println("Active");
-    } else {
-      Serial.println("Not Active");
-    }*/
-
     Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
     Serial.print(F("Time: "));
@@ -549,6 +539,8 @@ void updateSystem(){
     Serial.print(F("Free RAM:"));
     Serial.println(FreeRam());
     Serial.println(F("=============================================="));
+
+    */
 
     //Alarm checks
     if(activeAlarms[0]){
@@ -749,8 +741,8 @@ void loop(void) {
   updateSystem();
 
   // service the COP // if we don't update this the wacthdog will reset our teensy (For hangs and crashes)
-  SIM_SRVCOP = 0x55;
-  SIM_SRVCOP = 0xAA;
+  //SIM_SRVCOP = 0x55;
+  //SIM_SRVCOP = 0xAA;
 }
 
 /*
@@ -1565,17 +1557,10 @@ void getTimeFromDevice(char message[], short len){
 void shutDown(){
   HWSERIAL.print("AT"); // disconnect
   digitalWrite(BT_POWER,LOW); // turn off BT module
-  isConnected = false;
-  // clear screen so it draws no power
-  int whatPin = Snooze.deepSleep(config); //change to hibernate?
-  delay(500);
+  config.pinMode(DOWN_BUTTON, TSI, touchRead(DOWN_BUTTON) + 220); // putting this here fixed all my problems
+  int whatPin = Snooze.hibernate(config);
   if(whatPin == 37){ // 37 is the TSI detected number
-    digitalWrite(BT_POWER,HIGH);
-    //everything in ram is kept so we must reset the flags on wake up
-    shutdown = false;
-    readyForShutdown = false;
-    shutDownCounter = -1;
-    loading = 3;
+    SCB_AIRCR = 0x05FA0004; //reset chip
   }
 }
 void setAlarm(short alarmType, short hours, short minutes, short date,short month){
@@ -1745,7 +1730,7 @@ short FreeRam() {
   #endif  // __arm__
 }
 
-#ifdef __cplusplus
+/*#ifdef __cplusplus
 extern "C" {
 #endif
 void startup_early_hook() {
@@ -1753,4 +1738,4 @@ void startup_early_hook() {
 }
 #ifdef __cplusplus
 }
-#endif
+#endif */

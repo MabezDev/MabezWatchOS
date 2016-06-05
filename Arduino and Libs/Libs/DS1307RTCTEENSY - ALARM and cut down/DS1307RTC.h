@@ -98,10 +98,10 @@ class DS1307RTC
     static bool set(time_t t);
     static bool read(tmElements_t &tm);
     static bool write(tmElements_t &tm);
-    static bool chipPresent() { return exists; }
-    static unsigned char isRunning();
-    static void setCalibration(char calValue);
-    static char getCalibration();
+    //static bool chipPresent() { return exists; }
+    //static unsigned char isRunning();
+    //static void setCalibration(char calValue);
+    //static char getCalibration();
 	static byte writeRTC(byte addr, byte *values, byte nBytes);
 	static byte writeRTC(byte addr, byte value);
 	static void setAlarm(ALARM_TYPES_t alarmType, byte seconds, byte minutes, byte hours, byte daydate);

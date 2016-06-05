@@ -25,13 +25,15 @@
     -(30/05/16) Added alarm page and alarm functionality for both alarms available on the DS3231
     -(31/05/16) The Tp4056 charger board I am using uses a open collector system, after running a wire directly from the TP4056 charge indicator pin, into pulled up pin
                 and it works! Luckily we draw less C/10 (Capacity of the battery/10) so the charge can terminate successfully!
-    -(31/05/16) Switched all (bar one) ints to shorts and gather about 230 bytes of RAM extra, and saved storage space too
+    -(31/05/16) Switched all (bar one) ints to shorts and gather about 230 bytes of RAM extra
     -(01/06/16) Added Software turn off, added watchdog timer that resets teensy if it is not serviced(Untested), At 99% of Storage need to find some space somewhere
+    -(04/06/16) Fixed major turn off bug where we were drawing twice the operational current.
+    -(05/06/16) Added code to turn off the display, now when we shutdown we only draw 550uA, so we should last 436 hours (18 days whilst shut down (plenty of time :))) 
     
  *
  *  Buglist:
     - [MAJOR] DEEP SLEEP uses 37MA for some unknown reason, on an empty exmaple sketch with just sleep it works fine [FIXED]  
-              - Using hibernate and moving the pinMode Sleep block top the shutdown functions
+              - Using hibernate and moving the pinMode Sleep block top the shutdown function fixed it
  *
  *
  *  Todo:
@@ -112,6 +114,9 @@
 #include <Snooze.h>
 
 #define HWSERIAL Serial1
+
+#define SSD1306_DISPLAYOFF 0xAE  //used for turning off display when we power down
+#define SSD1306_DISPLAYON 0xAF
 
 SnoozeBlock config;
 
@@ -484,15 +489,8 @@ void updateSystem(){
 
     //check and prepare for shutdown
     if(shutdown){
-      if(readyForShutdown){
-        Serial.println("Shutting down...");
-        shutDown();
-        //shutdown = false;
-        //readyForShutdown = false;
-      } else {
-        Serial.println("Shut down called, blanking display...");
-        readyForShutdown = true;
-      }
+      Serial.println("Shutting down...");
+      shutDown();
     }
 
     /*Serial.println(F("=============================================="));
@@ -594,7 +592,7 @@ void loop(void) {
     if(loading > 0){ // make sure we dont miss the 0
       u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
       u8g_DrawStr(&u8g,42,55,"Loading...");
-    } else if(!shutdown){
+    } else {
       switch(pageIndex){
         case 0: homePage(clockArray[0],clockArray[1],clockArray[2]); break;
         case 1: notificationMenuPage(); break;
@@ -1557,6 +1555,7 @@ void getTimeFromDevice(char message[], short len){
 void shutDown(){
   HWSERIAL.print("AT"); // disconnect
   digitalWrite(BT_POWER,LOW); // turn off BT module
+  oledCommand(SSD1306_DISPLAYOFF); // turn off display
   config.pinMode(DOWN_BUTTON, TSI, touchRead(DOWN_BUTTON) + 220); // putting this here fixed all my problems
   int whatPin = Snooze.hibernate(config);
   if(whatPin == 37){ // 37 is the TSI detected number
@@ -1728,6 +1727,15 @@ short FreeRam() {
   #else  // __arm__
     return __brkval ? &top - __brkval : &top - &__bss_end;
   #endif  // __arm__
+}
+
+void oledCommand(uint8_t c){
+  // I2C
+  uint8_t control = 0x00;   // Co = 0, D/C = 0
+  Wire.beginTransmission(0x3C); // 0x3C is address of oled
+  Wire.write(control);
+  Wire.write(c);
+  Wire.endTransmission();
 }
 
 /*#ifdef __cplusplus

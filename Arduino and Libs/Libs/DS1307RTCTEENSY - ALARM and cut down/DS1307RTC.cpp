@@ -224,7 +224,7 @@ bool DS1307RTC::write(tmElements_t &tm)
   return true;
 }
 
-unsigned char DS1307RTC::isRunning()
+/*unsigned char DS1307RTC::isRunning()
 {
   Wire1.beginTransmission(DS1307_CTRL_ID);
 #if ARDUINO >= 100  
@@ -277,7 +277,7 @@ char DS1307RTC::getCalibration()
   char out = calReg & 0x1f;
   if (!(calReg & 0x20)) out = -out; // S bit clear means a negative value
   return out;
-}
+}*/
 
 // PRIVATE FUNCTIONS
 

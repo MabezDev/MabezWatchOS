@@ -14,21 +14,23 @@
  *             will work on capacitive touch buttons, the app and other stuff that doesn't require the use of the OLED.
  *  -(19/05/16)This firmware now only uses char arrays(No more heap fragmentation!) and now can support the detction of multibutton presses
  *  -(19/05/16)New OLED, finished the timer app's basic functionality.
- *  -(20/05/16) Settings page is impemented but need to add the eeprom storage functionality
+ *  -(20/05/16) Settings page is implemented but need to add the eeprom storage functionality
  *  -(22/05/16) Added genric function to display a menu, we use a function as a parameter and that function displays one menu item
     -(25/05/16) Code efficency improvements. Again cleaned out all usages of String (except progmem constants), in theory we should never crash from running out of memory
                 - As of this update, we have 815 bytes of RAM, and about 10K of progmem available on Teensy LC
     -(25/05/16) Added vibration system methods
     -(26/05/16) [MAJOR] We now tell the app to hold the notifications in a queue till we are ready to read them, this solves all the memory concerns had
     -(26/05/16) Switched from DS1302 RTC to smaller, better DS3231
-    -(30/05/16) Added battery charging algorithm, works well enough to know when a single lithium cell is charged
+    -(30/05/16) Added battery charging algorithm, works well enough to know when a single lithium cell is charged [REMOVED]
     -(30/05/16) Added alarm page and alarm functionality for both alarms available on the DS3231
-    -(31/05/16) The Tp4056 charger board I am using uses a open collector system, after running a wire directly from the TP4056 charge indicator pin, into pulled up pin
+    -(31/05/16) The Tp4056 charger board I am using uses a open collector system for powering the charge status leds, after running a wire directly from the TP4056 charge indicator pin, into pulled up pin
                 and it works! Luckily we draw less C/10 (Capacity of the battery/10) so the charge can terminate successfully!
     -(31/05/16) Switched all (bar one) ints to shorts and gather about 230 bytes of RAM extra
-    -(01/06/16) Added Software turn off, added watchdog timer that resets teensy if it is not serviced(Untested), At 99% of Storage need to find some space somewhere
+    -(01/06/16) Added Software turn off. At 99% of Storage need to find some space somewhere
     -(04/06/16) Fixed major turn off bug where we were drawing twice the operational current.
-    -(05/06/16) Added code to turn off the display, now when we shutdown we only draw 550uA, so we should last 436 hours (18 days whilst shut down (plenty of time :))) 
+    -(05/06/16) Added code to turn off the display, now when we shutdown we only draw 550uA, so we should last 436 hours (18 days whilst shut down (plenty of time :)))
+                - Note: I tried the OLED that wouldn't work a couple of months back and it now works fine, no clue what happened but now I have two.
+    -(05/06/16) Added watchdog timer that resets teensy if it is not serviced, the watchdog is then disabled before shutdown so it doesn't wake the teensy up from sleep
     
  *
  *  Buglist:
@@ -39,7 +41,7 @@
  *  Todo:
  *    -Use touch capacitive sensors instead of switches to simplify PCB and I think it will be nicer to use. - [DONE]
  *    -Maybe use teensy 3.2, more powerful, with 64k RAM, and most importantly has a RTC built in [OPTIONAL]
- *    -add reply phrases, if they are short answers like yeah, nah, busy right now etc. - [MINOR]
+ *    -add reply phrases, if they are short answers like yeah, nah, busy right now etc. (Will require alot of work on the app side)- [OPTIONAL]
  *    -Could use a on screen keyboard but it might be too much hassle to use properly. - [OPTIONAL]
  *    -text wrapping on the full notification page - [NOT POSSIBLE], we dont have enough ram to play with to textwrap
  *    -add a input time out where if the user does not interact with the watch the widget goes back to a clock one - [DONE]
@@ -47,7 +49,7 @@
  *    - fix the alert function to have two pulses without delay (Fix could be aleRTCounter set it to 2 then vibrate and -- from aleRTCounter) - [DONE]
  *    - use isPrintable on a char to find out if we can send it (maybe do thios on the phone side) - [NEED TESTING]
  *    - finish timer app (use our system click to time the seconds) - [DONE]
-          - need to alert the suer when the timer is up - DONE
+          - need to alert the suer when the timer is up - [DONE]
           - make it look better - [DONE]
  *    -settings page
           - favourite widget (will default to once no input is recieved) - DONE
@@ -100,7 +102,8 @@
       - add hardware power on/off [OPTIONAL]
       - add hardware reset - [NOT POSSIBLE] instead we added the watch dog timer, to reset the teensy in software if our program hangs
       - sort notification index so it starts at -1 and goes to 0 (still display zero), as we are wasting a notification in the array which could save us about 200 bytes
-      -
+      - sort notifications into packages so fb, text, 
+      - add a low power mode, where we have a digital clock only, updated every 15 seconds or something, rest of the time we sleep, no bluetooth or notiifcation services
  */
 
 
@@ -426,7 +429,7 @@ void updateSystem(){
 
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
-    batteryPercentage = ((batteryVoltage - 3)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts
+    batteryPercentage = ((batteryVoltage - 3.4)/0.8)*100; // Gives a percentage range between 4.2 and 3.4 volts
     isCharging = !digitalRead(CHARGING_STATUS_PIN);
 
     if((isCharging != prevIsCharging)){
@@ -739,8 +742,8 @@ void loop(void) {
   updateSystem();
 
   // service the COP // if we don't update this the wacthdog will reset our teensy (For hangs and crashes)
-  //SIM_SRVCOP = 0x55;
-  //SIM_SRVCOP = 0xAA;
+  SIM_SRVCOP = 0x55;
+  SIM_SRVCOP = 0xAA;
 }
 
 /*
@@ -1556,6 +1559,7 @@ void shutDown(){
   HWSERIAL.print("AT"); // disconnect
   digitalWrite(BT_POWER,LOW); // turn off BT module
   oledCommand(SSD1306_DISPLAYOFF); // turn off display
+  SIM_COPC = 0; // turn off the watchdog timer so it doenst wake us up from shutdown, when we wake we reset and the watchdog is enabled again
   config.pinMode(DOWN_BUTTON, TSI, touchRead(DOWN_BUTTON) + 220); // putting this here fixed all my problems
   int whatPin = Snooze.hibernate(config);
   if(whatPin == 37){ // 37 is the TSI detected number
@@ -1738,12 +1742,12 @@ void oledCommand(uint8_t c){
   Wire.endTransmission();
 }
 
-/*#ifdef __cplusplus
+#ifdef __cplusplus
 extern "C" {
 #endif
 void startup_early_hook() {
-  // empty
+  // empty so we don't disable the watchdog
 }
 #ifdef __cplusplus
 }
-#endif */
+#endif 

@@ -36,6 +36,7 @@
  *  Buglist:
     - [MAJOR] DEEP SLEEP uses 37MA for some unknown reason, on an empty exmaple sketch with just sleep it works fine [FIXED]  
               - Using hibernate and moving the pinMode Sleep block top the shutdown function fixed it
+    - [MINOR] if a short message is received and the <f> tag is corrupted, we miss all messages untill the final message is filled, should add a timeout to recieve a full message
  *
  *
  *  Todo:
@@ -265,7 +266,9 @@ bool started = false; //flag to identify whether its the start or the end of a c
 
 bool shutdown = false;
 bool readyForShutdown = false;
-short shutDownCounter = -1; // when we free up some space add a page to count down till shutdown, allowing the shutdown to be cancelled
+short shutDownCounter = -1;
+
+//bool lowPower = false;
 
 
 //timer variables
@@ -293,6 +296,7 @@ char alertText[20]; //20 chars that fit
 short alertTextLen = 0;
 short alertVibrationCount = 0;
 bool vibrating = false;
+bool canDismiss = true;
 long prevAlertMillis = 0;
 
 short loading = 3; // time the loading screen is show for
@@ -429,7 +433,7 @@ void updateSystem(){
 
     // update battery stuff
     batteryVoltage = getBatteryVoltage();
-    batteryPercentage = ((batteryVoltage - 3.4)/0.8)*100; // Gives a percentage range between 4.2 and 3.4 volts
+    batteryPercentage = ((batteryVoltage - 3.4)/0.77)*100; // Gives a percentage range between 4.17 and 3.4 volts
     isCharging = !digitalRead(CHARGING_STATUS_PIN);
 
     if((isCharging != prevIsCharging)){
@@ -444,7 +448,7 @@ void updateSystem(){
       isCharged = false;
     }
 
-    //make sure we never display a negative percentage
+    //make sure we never display a percentage out of bounds
     if(batteryPercentage < 0){
       batteryPercentage = 0;
     } else if(batteryPercentage > 100){
@@ -478,10 +482,16 @@ void updateSystem(){
             timerArray[2] = 59;
           } else {
             isRunning = false;
-            createAlert("Timer Finished!",15,5);
+            createAlert("Timer Finished!",15,5,true);
           }
         }
       }
+    }
+
+    if(batteryPercentage == 0){
+      createAlert("Low battery, shutting down.",27,0,false);
+      delay(2000);
+      shutdown = true;
     }
 
     if(shutDownCounter > 0){
@@ -489,6 +499,8 @@ void updateSystem(){
     } else if(shutDownCounter == 0) {
       shutdown = true;
     }
+
+    
 
     //check and prepare for shutdown
     if(shutdown){
@@ -546,7 +558,7 @@ void updateSystem(){
     //Alarm checks
     if(activeAlarms[0]){
       if(RTC.alarm(ALARM_1)){
-        createAlert("ALARM1",6,10);
+        createAlert("ALARM1",6,10,true);
         Serial.println("ALARM 1 HAD GONE OFF");
         activeAlarms[0] = false;
         saveToEEPROM(ALARM_ADDRESS,activeAlarms[0]);
@@ -554,7 +566,7 @@ void updateSystem(){
     }
     if(activeAlarms[1]){
       if(RTC.alarm(ALARM_2)){
-        createAlert("ALARM2",6,10);
+        createAlert("ALARM2",6,10,true);
         Serial.println("ALARM 2 HAD GONE OFF");
         activeAlarms[1] = false;
         saveToEEPROM(ALARM_ADDRESS + 5,activeAlarms[1]);
@@ -872,8 +884,9 @@ void alertPage(){
   u8g_SetFont(&u8g, u8g_font_6x12);
   short xOffset = (alertTextLen * 6)/2;
   u8g_DrawStr(&u8g,64 - xOffset, 32,alertText);
-  u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
-  //remeber to add vibrate if needed
+  if(canDismiss){
+    u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
+  }
 }
 
 void notificationMenuPage(){
@@ -1577,8 +1590,6 @@ void setAlarm(short alarmType, short hours, short minutes, short date,short mont
     Serial.println("ALARM2 Set!");
     start = ALARM_ADDRESS + 4;
   }
-  Serial.print("Starting write at address: ");
-  Serial.println(start);
   saveToEEPROM(start,true); //set alarm active
   start++;
   saveToEEPROM(start,hours);
@@ -1590,7 +1601,7 @@ void setAlarm(short alarmType, short hours, short minutes, short date,short mont
   saveToEEPROM(start,month);
 }
 
-void createAlert(char text[],short len, short vibrationTime){
+void createAlert(char text[],short len, short vibrationTime,bool dismissable){
   if(len < 20){
     lastPage = pageIndex;
     alertTextLen = len;
@@ -1598,6 +1609,7 @@ void createAlert(char text[],short len, short vibrationTime){
       alertText[i] = text[i];
     }
     vibrate(vibrationTime);
+    canDismiss = dismissable;
     pageIndex = ALERT;
   } else {
     Serial.println(F("Not Creating Alert, text to big!"));
@@ -1652,7 +1664,7 @@ void resetBTModule(){
   HWSERIAL.print("AT"); //disconnect
   delay(100); //need else the module won't see the commands as two separate ones
   HWSERIAL.print("AT+RESET"); //then reset
-  createAlert("BT Module Reset.",16,0);
+  createAlert("BT Module Reset.",16,0,true);
 }
 
 void resetTransmissionVariables(){
@@ -1745,9 +1757,9 @@ void oledCommand(uint8_t c){
 #ifdef __cplusplus
 extern "C" {
 #endif
-void startup_early_hook() {
-  // empty so we don't disable the watchdog
-}
+  void startup_early_hook() {
+    // empty so we don't disable the watchdog
+  }
 #ifdef __cplusplus
 }
 #endif 

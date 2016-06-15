@@ -28,6 +28,17 @@ This is the firmware the Smart watch I am creating runs on. This code was create
   - TP4056 single cell lithium charger board
   - Single cell 240mAh lithium ion battery
   - Teensy LC (48Mhz)
+  
+## Input and gestures
+  - Dual click (UP & DOWN together) to go back
+  - Tri Click (ALL THREE together) to go to the home page with the favourite widget selected from the settings
+  
+## Power Specifications
+  - Draws 24mA on average when operating normally.
+  - In Shutdown mode it draws 550uA
+  - Power on time: Over 8 hours
+  - Shutdown mode timer: 18 days
+  - Quick charge under an Hour
 
 ## Other functionality
   - Settings, store basic settings on the on board EEPROM

@@ -27,7 +27,7 @@ This is the firmware the Smart watch I am creating runs on. This code was create
   - HM-11 Bluetooth 4.0 low energy transciever
   - TP4056 single cell lithium charger board
   - Single cell 240mAh lithium ion battery
-  - Teensy LC (48Mhz)
+  - Teensy LC (48Mhz) (Soon to be replaced with STM due to difficulty getting the bootloader from PJRC Store)
   
 ## Input and gestures
   - Dual click (UP & DOWN together) to go back

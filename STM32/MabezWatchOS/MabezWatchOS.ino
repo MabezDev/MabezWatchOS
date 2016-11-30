@@ -1,10 +1,13 @@
 #include <Arduino.h>
 
-#include <u8g_i2c.h>
-#include <i2c_t3.h>
-#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
+//#include <// u8g_i2c.h>
+//#include <i2c_t3.h>
+//#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
 #include <EEPROM.h>
 #include <Time.h>
+#include<itoa.h>
+
+#include<Adafruit_SH1106.h>
 
 #define HWSERIAL Serial1
 
@@ -17,7 +20,10 @@
 #endif  // __arm__
 
 //u8g lib object without the c++ wrapper due to lack of support of the OLED
-u8g_t u8g;
+//// u8g_t u8g;
+
+// display object for sh11106
+Adafruit_SH1106 display(0);
 
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm.
@@ -48,6 +54,8 @@ u8g_t u8g;
     -(31/05/16) The Tp4056 charger board I am using uses a open collector system, after running a wire directly from the TP4056 charge indicator pin, into pulled up pin
                 and it works! Luckily we draw less C/10 (Capacity of the battery/10) so the charge can terminate successfully!
     -(31/05/16) Switched all (bar one) ints to shorts and gather about 230 bytes of RAM extra, and saved storage space too
+
+    -(30/11/2016) Moving to STM32 platform, starting conversion after weeks of trying to get the oled to play with it. Finally acheived that tonight but we need to switch to new GFX lib, should be a reasonalbel easy swap (hopefully)
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate
@@ -137,8 +145,8 @@ bool lastb_down = false;
 #define ALL_THREE (UP_ONLY|OK_ONLY|DOWN_ONLY)
 #define NONE_OF_THEM  0
 
-//#define isButtonPressed(pin)  (digitalRead(pin) == LOW) this was old with buttons
-#define isButtonPressed(pin) (touchRead(pin) > TOUCH_THRESHOLD)
+#define isButtonPressed(pin)  (digitalRead(pin) == LOW) //this was old with buttons
+//#define isButtonPressed(pin) (touchRead(pin) > TOUCH_THRESHOLD)
 
 short lastVector = 0;
 long prevButtonPressed = 0;
@@ -168,14 +176,14 @@ short timeWeGotWeather[2] = {0,0};
 
 
 //time and date constants
-tmElements_t tm;
+//tmElements_t tm;
 time_t t;
 const short PROGMEM clockRadius = 32;
 const short PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
 bool gotUpdatedTime = false;
-short clockArray[3] = {0,0,0};
+short clockArray[3] = {0,47,32};
 short dateArray[4] = {0,0,0,0};
 
 long prevMillis = 0;
@@ -197,10 +205,10 @@ bool wantNotifications = true;
 bool shouldRemove = false;
 
 //pin constants
-const short PROGMEM OK_BUTTON = 17;
-const short PROGMEM DOWN_BUTTON = 16;
-const short PROGMEM UP_BUTTON = 15;
-const short PROGMEM BATT_READ = A6;
+const short PROGMEM OK_BUTTON = PB4;
+const short PROGMEM DOWN_BUTTON = PB3;
+const short PROGMEM UP_BUTTON = PB5;
+const short PROGMEM BATT_READ = 0;
 const short PROGMEM VIBRATE_PIN = 10;
 const short PROGMEM CHARGING_STATUS_PIN = 9;
 const short PROGMEM BT_POWER = 21; // pin 5 is broken, need to reflow? as voltage is only 1.3v
@@ -222,7 +230,7 @@ const short PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawSt
 //navigation vars
 short pageIndex = 0;
 short menuSelector = 0;
-short widgetSelector = 0;
+short widgetSelector = 3;
 const short numberOfNormalWidgets = 6; // actually 3, 0,1,2.
 const short numberOfDebugWidgets = 1;
 short numberOfWidgets = 0;
@@ -320,6 +328,8 @@ void setup(void) {
   Serial.begin(9600);
   HWSERIAL.begin(9600);
 
+  display.begin();
+  
   pinMode(OK_BUTTON,INPUT_PULLUP);
   pinMode(DOWN_BUTTON,INPUT_PULLUP);
   pinMode(UP_BUTTON,INPUT_PULLUP);
@@ -333,7 +343,7 @@ void setup(void) {
   //turn on BT
   digitalWrite(BT_POWER, HIGH);
 
-  u8g_prepare();
+  //// u8g_prepare();
 
   for(short i = 0; i < numberOfSettings; i++){
     settingValue[i] = readFromEEPROM(i);
@@ -350,9 +360,9 @@ void setup(void) {
   messagePtr = &message[0]; // could have used messagePtr = message
 
   //setup batt read pin
-  analogReference(DEFAULT);
-  analogReadResolution(10);// 2^10 = 1024
-  analogReadAveraging(32);//smoothing
+//  analogReference(DEFAULT);
+//  analogReadResolution(10);// 2^10 = 1024
+//  analogReadAveraging(32);//smoothing
 
   //HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
 
@@ -362,8 +372,15 @@ void setup(void) {
 }
 
 void u8g_prepare(void) {
-  u8g_InitComFn(&u8g, &u8g_dev_sh1106_128x64_2x_i2c, u8g_com_hw_i2c_fn);
-  u8g_SetFont(&u8g, u8g_font_6x12);
+  // u8g_InitComFn(&u8g, &// u8g_dev_sh1106_128x64_2x_i2c, // u8g_com_hw_i2c_fn);
+  // u8g_SetFont(&u8g, // u8g_font_6x12);
+}
+
+void drawStr(int x, int y, char* text){
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(x,y);
+  display.print(text);
 }
 
 /*
@@ -374,15 +391,15 @@ void showMenu(short numberOfItems,void itemInMenuFunction(short),bool showSelect
   for(short i=0; i < numberOfItems + 1;i++){
     short startY = 0;
     if(i==menuSelector && showSelector){
-        u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
+        // u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
     }
     if(i!=numberOfItems){
         itemInMenuFunction(i); //draw our custom menuItem
     } else {
-      u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
+      // u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
     }
     y += MENU_ITEM_HEIGHT;
-    u8g_DrawFrame(&u8g,x,startY,128,y +Y_OFFSET);
+    // u8g_DrawFrame(&u8g,x,startY,128,y +Y_OFFSET);
   }
   y = 0;
 }
@@ -397,14 +414,14 @@ void updateSystem(){
     prevMillis = currentInterval;
 
     //update RTC info
-    RTC.read(tm);
-    clockArray[0] = tm.Hour;
-    clockArray[1] = tm.Minute;
-    clockArray[2] = tm.Second;
-    dateArray[0] = tm.Day;
-    dateArray[1] = tm.Month;
-    dateArray[2] = tmYearToCalendar(tm.Year);
-    dateArray[3]  = tm.Wday;
+//    RTC.read(tm);
+//    clockArray[0] = tm.Hour;
+//    clockArray[1] = tm.Minute;
+//    clockArray[2] = tm.Second;
+//    dateArray[0] = tm.Day;
+//    dateArray[1] = tm.Month;
+//    dateArray[2] = tmYearToCalendar(tm.Year);
+//    dateArray[3]  = tm.Wday;
 
 
     // update battery stuff
@@ -514,26 +531,26 @@ void updateSystem(){
     Serial.println(dateArray[2]);
 
     Serial.print(F("Free RAM:"));
-    Serial.println(FreeRam());
+    //Serial.println(FreeRam());
     Serial.println(F("=============================================="));
 
     //Alarm checks
-    if(activeAlarms[0]){
-      if(RTC.alarm(ALARM_1)){
-        createAlert("ALARM1",6,10);
-        Serial.println("ALARM 1 HAD GONE OFF");
-        activeAlarms[0] = false;
-        saveToEEPROM(ALARM_ADDRESS,activeAlarms[0]);
-      }
-    }
-    if(activeAlarms[1]){
-      if(RTC.alarm(ALARM_2)){
-        createAlert("ALARM2",6,10);
-        Serial.println("ALARM 2 HAD GONE OFF");
-        activeAlarms[1] = false;
-        saveToEEPROM(ALARM_ADDRESS + 5,activeAlarms[1]);
-      }
-    }
+//    if(activeAlarms[0]){
+//      if(RTC.alarm(ALARM_1)){
+//        createAlert("ALARM1",6,10);
+//        Serial.println("ALARM 1 HAD GONE OFF");
+//        activeAlarms[0] = false;
+//        saveToEEPROM(ALARM_ADDRESS,activeAlarms[0]);
+//      }
+//    }
+//    if(activeAlarms[1]){
+//      if(RTC.alarm(ALARM_2)){
+//        createAlert("ALARM2",6,10);
+//        Serial.println("ALARM 2 HAD GONE OFF");
+//        activeAlarms[1] = false;
+//        saveToEEPROM(ALARM_ADDRESS + 5,activeAlarms[1]);
+//      }
+//    }
 
 
     HWSERIAL.print("<b>");
@@ -564,11 +581,14 @@ void updateSystem(){
 */
 
 void loop(void) {
-  u8g_FirstPage(&u8g);
-  do {
-    if(loading !=0){
-      u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
-      u8g_DrawStr(&u8g,42,55,"Loading...");
+    //start picture loop
+    display.clearDisplay();
+
+    // modify the display in here
+    
+    if(loading > 0){
+      // u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
+      drawStr(42,55,"Loading...");
     } else {
       switch(pageIndex){
         case 0: homePage(clockArray[0],clockArray[1],clockArray[2]); break;
@@ -580,7 +600,10 @@ void loop(void) {
         case 10: alertPage(); break;
       }
     }
-  } while( u8g_NextPage(&u8g) );
+
+    // end picture loop by displaying the data we changed
+    display.display();
+    
     handleInput();
     while(HWSERIAL.available()){
       message[messageIndex] = char(HWSERIAL.read());//store char from serial command
@@ -720,14 +743,14 @@ void loop(void) {
 */
 
 void alarmPage(){
-  u8g_DrawStr(&u8g, 24,23,"H");
-  u8g_DrawStr(&u8g, 54,23,"M");
-  u8g_DrawStr(&u8g, 84,23,"D");
+   drawStr(24,23,"H");
+   drawStr(54,23,"M");
+   drawStr(84,23,"D");
 
   intTo2Chars(alarmTime[0]);
-  u8g_DrawStr(&u8g, 24,35,numberBuffer);
+  drawStr(24,35,numberBuffer);
   intTo2Chars(alarmTime[1]);
-  u8g_DrawStr(&u8g, 54,35,numberBuffer);
+  drawStr(54,35,numberBuffer);
   //draw day of week set up to a week in advance
   short dayAhead = dateArray[3] - 1; //set current day
   for(short i = 0; i < alarmTime[2]; i++){ // add the exra days
@@ -763,48 +786,48 @@ void alarmPage(){
     prevAlarmToggle = alarmToggle;
   }
 
-  u8g_DrawStr(&u8g, 84,35,days[dayAhead].c_str());
+  //drawStr(84,35,days[dayAhead]);
 
   if(alarmToggle == 0){
-    u8g_DrawStr(&u8g, 0,0 + FONT_HEIGHT,"One");
+    drawStr(0,0 ,"One");
   } else {
-    u8g_DrawStr(&u8g, 0,0 + FONT_HEIGHT,"Two");
+    drawStr(0,0 ,"Two");
   }
 
 
   if(!activeAlarms[alarmToggle]){
-    u8g_DrawStr(&u8g, 34,54,"Set");
+     drawStr(34,54,"Set");
   } else {
-    u8g_DrawStr(&u8g, 30,54,"Unset");
+     drawStr(30,54,"Unset");
   }
 
-  u8g_DrawStr(&u8g, 70,54,"Swap");
+   drawStr(70,54,"Swap");
 
 
   drawSelectors(alarmIndex);
 }
 
 void timerPage(){
-  u8g_DrawStr(&u8g, 24,23,"H");
-  u8g_DrawStr(&u8g, 54,23,"M");
-  u8g_DrawStr(&u8g, 84,23,"S");
+   drawStr(24,23,"H");
+   drawStr(54,23,"M");
+   drawStr(84,23,"S");
 
   intTo2Chars(timerArray[0]);
-  u8g_DrawStr(&u8g, 24,35,numberBuffer);
+   drawStr(24,35,numberBuffer);
   intTo2Chars(timerArray[1]);
-  u8g_DrawStr(&u8g, 54,35,numberBuffer);
+   drawStr(54,35,numberBuffer);
   intTo2Chars(timerArray[2]);
-  u8g_DrawStr(&u8g, 84,35,numberBuffer);
+   drawStr(84,35,numberBuffer);
 
   drawSelectors(timerIndex);
 
   if(isRunning){
-    u8g_DrawStr(&u8g, 30,54,"Stop");
+     drawStr(30,54,"Stop");
   } else {
-    u8g_DrawStr(&u8g, 30,54,"Start");
+     drawStr(30,54,"Start");
   }
 
-  u8g_DrawStr(&u8g, 70,54,"Reset");
+   drawStr(70,54,"Reset");
 
 
 }
@@ -821,17 +844,17 @@ void drawSelectors(short index){
       case 0: drawTriangle(22,8,8,1); break;
       case 1: drawTriangle(52,8,8,1);break;
       case 2: drawTriangle(82,8,8,1); break;
-      case 3: u8g_DrawFrame(&u8g,28,45,34,13); break; //draw rectangle around this option
-      case 4: u8g_DrawFrame(&u8g,68,45,34,13); break; //draw rectangle around this option
+      case 3: display.drawRect(28,45,34,13,WHITE);break; //draw rectangle around this option
+      case 4: display.drawRect(68,45,34,13,WHITE); break; //draw rectangle around this option
     }
   }
 }
 
 void alertPage(){
-  u8g_SetFont(&u8g, u8g_font_6x12);
+  // u8g_SetFont(&u8g, // u8g_font_6x12);
   short xOffset = (alertTextLen * 6)/2;
-  u8g_DrawStr(&u8g,64 - xOffset, 32,alertText);
-  u8g_DrawStr(&u8g,64 - 60, 50,"Press OK to dismiss.");
+   drawStr(64 - xOffset, 32,alertText);
+   drawStr(64 - 60, 50,"Press OK to dismiss.");
   //remeber to add vibrate if needed
 }
 
@@ -843,7 +866,7 @@ void notificationMenuPage(){
     //menuSelector = 0; //dont put it back to zero as when new message com in the order will get screwed
   }
   if(notificationIndex == 0){
-    u8g_DrawStr(&u8g,30,32,"No Messages.");
+     drawStr(30,32,"No Messages.");
   }
   showMenu(notificationIndex, notificationMenuPageItem,true);
 }
@@ -858,22 +881,22 @@ void settingsPage(){
 
 void notificationMenuPageItem(short position){
   //draw title
-  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
+   drawStr(x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
 
-  u8g_SetFont(&u8g, u8g_font_04b_03);
+  // u8g_SetFont(&u8g, // u8g_font_04b_03);
   { //draw timestamp
     intTo2Chars(notifications[position].dateReceived[0]);
-    u8g_DrawStr(&u8g,x+95,y + Y_OFFSET + FONT_HEIGHT,numberBuffer);
-    u8g_DrawStr(&u8g,x+103,y + Y_OFFSET + FONT_HEIGHT,":");
+     drawStr(x+95,y + Y_OFFSET ,numberBuffer);
+     drawStr(x+103,y + Y_OFFSET ,":");
     intTo2Chars(notifications[position].dateReceived[1]);
-    u8g_DrawStr(&u8g,x+106,y + Y_OFFSET + FONT_HEIGHT,numberBuffer);
+     drawStr(x+106,y + Y_OFFSET ,numberBuffer);
   }
-  u8g_SetFont(&u8g, u8g_font_6x12);
+  // u8g_SetFont(&u8g, // u8g_font_6x12);
 }
 
 void settingsMenuItem(short position){
-  u8g_DrawStr(&u8g,x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
-  u8g_DrawStr(&u8g,x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,itoa(settingValue[position],numberBuffer,10));
+  //drawStr(x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
+  drawStr(x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,itoa(settingValue[position],numberBuffer,10));
 }
 
 
@@ -892,7 +915,7 @@ void notificationFullPage(short chosenNotification){
     for(short i=0; i < textLength; i++){
       if((charIndex >= charsThatFit) || i == (textLength - 1)){ // i == textLength so we catch what we ahve of a line if we dont have a complete line
         lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
-        u8g_DrawStr(&u8g,0,lines * 10 + FONT_HEIGHT + Y_OFFSET, lineBuffer); //draw the line
+        drawStr(0,lines * 10  + Y_OFFSET, lineBuffer); //draw the line
         lines++;
         charIndex = 0;
         memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
@@ -902,44 +925,46 @@ void notificationFullPage(short chosenNotification){
       }
     }
   } else {
-    u8g_DrawStr(&u8g,0,FONT_HEIGHT,notifications[chosenNotification].text);
+    drawStr(0,FONT_HEIGHT,notifications[chosenNotification].text);
     lines++;
   }
   lineCount = (lines); //- 1);
   intTo2Chars(lineCount);
-  u8g_DrawStr(&u8g,64,50 + FONT_HEIGHT,numberBuffer);
-  u8g_DrawStr(&u8g, 30, 50, String(textLength).c_str());
+  drawStr(64,50 ,numberBuffer);
+  //drawStr(30, 50, textLength);
 }
 
 void homePage(short hour, short minute,short second){
-  u8g_DrawCircle(&u8g,32,32,30,U8G_DRAW_ALL);
-  u8g_DrawCircle(&u8g,32,32,29,U8G_DRAW_ALL);
-  u8g_DrawStr(&u8g,59-32,2+ FONT_HEIGHT,"12");
-  u8g_DrawStr(&u8g,59-32 + 3,45+ FONT_HEIGHT,"6");
-  u8g_DrawStr(&u8g,7,32 + 3,"9");
-  u8g_DrawStr(&u8g,53,32   + 3,"3");
+  // u8g_DrawCircle(&u8g,32,32,30,// u8g_DRAW_ALL);
+  display.drawCircle(32,32,30,WHITE);
+  // u8g_DrawCircle(&u8g,32,32,29,// u8g_DRAW_ALL);
+  display.drawCircle(32,32,29,WHITE);
+   drawStr(59-32,8,"12");
+   drawStr(59-32 + 3,52,"6");
+   drawStr(7,32,"9");
+   drawStr(53,32,"3");
 
   if(clockArray[0] > 12){
-    u8g_DrawStr(&u8g,0,64,"PM");
+     drawStr(0,64,"PM");
   } else {
-    u8g_DrawStr(&u8g,0,64,"AM");
+     drawStr(0,64,"AM");
   }
 
 
   float hours = (((hour * 30) + ((minute/2))) * (PI/180));
   short x2 = 32 + (sin(hours) * (clockRadius/2));
   short y2 = 32 - (cos(hours) * (clockRadius/2));
-  u8g_DrawLine(&u8g,32,32,x2,y2); //hour hand
+  display.drawLine(32,32,x2,y2,WHITE); //hour hand
 
   float minutes = ((minute * 6) * (PI/180));
   short xx2 = 32 + (sin(minutes) * (clockRadius/1.4));
   short yy2 = 32 - (cos(minutes) * (clockRadius/1.4));
-  u8g_DrawLine(&u8g,32,32,xx2,yy2);//minute hand
+  display.drawLine(32,32,xx2,yy2,WHITE);//minute hand
 
   float seconds = ((second * 6) * (PI/180));
   short xxx2 = 32 + (sin(seconds) * (clockRadius/1.3));
   short yyy2 = 32 - (cos(seconds) * (clockRadius/1.3));
-  u8g_DrawLine(&u8g,32,32,xxx2,yyy2);//second hand
+  display.drawLine(32,32,xxx2,yyy2,WHITE);//second hand
 
   if(settingValue[1] == 1){
     numberOfWidgets = numberOfNormalWidgets + numberOfDebugWidgets;
@@ -951,43 +976,43 @@ void homePage(short hour, short minute,short second){
     case 0: timeDateWidget(); break;
     case 1: digitalClockWidget(); break;
     case 2: weatherWidget(); break;
-    case 3: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Messages"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 4: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,80,39 + 3,"Timer"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 5: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,70,39 + 3,"Settings"); u8g_SetFont(&u8g, u8g_font_6x12); break;
-    case 6: u8g_SetFont(&u8g, u8g_font_6x12); u8g_DrawStr(&u8g,73,42 + 3,"Reset"); u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); break;
-    case 7: u8g_SetFont(&u8g, u8g_font_7x14); u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); u8g_SetFont(&u8g, u8g_font_6x12); break;
+    case 3:  drawStr(70,39 + 3,"Messages"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Messages"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 4:  drawStr(80,39 + 3,"Timer"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,80,39 + 3,"Timer"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 5:  drawStr(70,39 + 3,"Settings"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Settings"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 6:  drawStr(73,42 + 3,"Reset"); /* u8g_SetFont(&u8g, // u8g_font_6x12); // u8g_DrawStr(&u8g,73,42 + 3,"Reset"); // u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); */ break;
+    case 7:  drawStr(75,42 + 3,"Alarms"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
   }
 
   //status bar - 15 px high for future icon ref
-  u8g_DrawFrame(&u8g,75,0,53,15);
+  display.drawRect(75,0,53,15,WHITE);
   //separator line between notifications and bt icon on the status bar
-  u8g_DrawLine(&u8g,116,0,116,14);
+  display.drawRect(116,0,116,14,WHITE);
   //batt voltage and connection separator
-  u8g_DrawLine(&u8g,97,0,97,14);
+  display.drawRect(97,0,97,14,WHITE);
 
   //notification indicator
 
-  u8g_DrawStr(&u8g,119,-1 + FONT_HEIGHT,itoa(notificationIndex,numberBuffer,10));
+  drawStr(119,2 ,itoa(notificationIndex,numberBuffer,10));
 
   //battery voltage
   if(!isCharging && !isCharged){
     if(batteryPercentage != 100){
-      u8g_DrawStr(&u8g,77,11,itoa(batteryPercentage,numberBuffer,10));
-      u8g_DrawStr(&u8g,89,11,"%");
+      drawStr(77,11,itoa(batteryPercentage,numberBuffer,10));
+      drawStr(89,11,"%");
     }
   } else if(isCharged){
     //fully charged symbol here
-    u8g_DrawXBMP(&u8g,79,1,14,12,CHARGED);
+    // u8g_DrawXBMP(&u8g,79,1,14,12,CHARGED);
   } else {
     //draw symbol to show that we are charging here
-    u8g_DrawXBMP(&u8g,80,2,14,12,CHARGING);
+    // u8g_DrawXBMP(&u8g,80,2,14,12,CHARGING);
   }
 
   //connection icon
   if(isConnected){
-    u8g_DrawXBMP(&u8g,102,2,8,10,BLUETOOTH_CONNECTED);
+    // u8g_DrawXBMP(&u8g,102,2,8,10,BLUETOOTH_CONNECTED);
   } else {
-    u8g_DrawStr(&u8g,102,11,"NC");
+    drawStr(102,11,"NC");
   }
 }
 
@@ -997,54 +1022,54 @@ void homePage(short hour, short minute,short second){
 
 void timeDateWidget(){
   //display date from RTC
-  u8g_SetFont(&u8g, u8g_font_7x14);
-  u8g_DrawStr(&u8g,72,20+14,days[dateArray[3] - 1].c_str());
+  // u8g_SetFont(&u8g, // u8g_font_7x14);
+  //drawStr(72,20+14,days[dateArray[3] - 1].c_str());
   intTo2Chars(dateArray[0]);
-  u8g_DrawStr(&u8g,72,34+14,numberBuffer);
-  u8g_DrawStr(&u8g,90,34+14,months[dateArray[1] - 1].c_str());
+  // u8g_DrawStr(&u8g,72,34+14,numberBuffer);
+  //drawStr(90,34+14,months[dateArray[1] - 1].c_str());
   intTo2Chars(dateArray[2]);
-  u8g_DrawStr(&u8g,72,48+14,numberBuffer);
-  u8g_SetFont(&u8g, u8g_font_6x12);
+  drawStr(72,48+14,numberBuffer);
+  // u8g_SetFont(&u8g, // u8g_font_6x12);
 }
 
 void digitalClockWidget(){
-  u8g_SetFont(&u8g, u8g_font_7x14);
-  u8g_DrawFrame(&u8g,68,28,60,16);
+  // u8g_SetFont(&u8g, // u8g_font_7x14);
+  display.drawRect(68,28,60,16,WHITE);
   intTo2Chars(clockArray[0]);
-  u8g_DrawStr(&u8g,69,28+14,numberBuffer);
-  u8g_DrawStr(&u8g,83,28+14,":");
+  drawStr(69,28,numberBuffer);
+  drawStr(83,28,":");
   intTo2Chars(clockArray[1]);
-  u8g_DrawStr(&u8g,91,28+14,numberBuffer);
-  u8g_DrawStr(&u8g,105,28+14,":");
+  drawStr(91,28,numberBuffer);
+  drawStr(105,28,":");
   intTo2Chars(clockArray[2]);
-  u8g_DrawStr(&u8g,113,28+14,numberBuffer);
-  u8g_SetFont(&u8g, u8g_font_6x12);
+  drawStr(113,28,numberBuffer);
+  // u8g_SetFont(&u8g, // u8g_font_6x12);
 }
 
 void weatherWidget(){
   if(weatherData){
     //change fonts
-    u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,72,19+FONT_HEIGHT,weatherDay);
+    // u8g_SetFont(&u8g, // u8g_font_7x14);
+    drawStr(72,19+FONT_HEIGHT,weatherDay);
 
-    u8g_SetFont(&u8g, u8g_font_04b_03);
+    // u8g_SetFont(&u8g, // u8g_font_04b_03);
     intTo2Chars(timeWeGotWeather[0]);
-    u8g_DrawStr(&u8g,105,15+ FONT_HEIGHT,numberBuffer);
-    u8g_DrawStr(&u8g,113,15+ FONT_HEIGHT,":");
+    drawStr(105,15,numberBuffer);
+    drawStr(113,15,":");
     intTo2Chars(timeWeGotWeather[1]);
-    u8g_DrawStr(&u8g,116,15+ FONT_HEIGHT,numberBuffer);
+    drawStr(116,15,numberBuffer);
 
-    u8g_SetFont(&u8g, u8g_font_6x12);
+    // u8g_SetFont(&u8g, // u8g_font_6x12);
 
-    u8g_DrawStr(&u8g,72,28+FONT_HEIGHT,weatherTemperature);
-    u8g_DrawStr(&u8g,102,28+FONT_HEIGHT,"C");
+    drawStr(72,28+FONT_HEIGHT,weatherTemperature);
+    drawStr(102,28+FONT_HEIGHT,"C");
 
     short index = 0;
     charIndex = 0;
     if(contains(weatherForecast,' ',sizeof(weatherForecast))){
       for(short i=0; i < sizeof(weatherForecast); i++){
         if(weatherForecast[i]==' ' || weatherForecast[i] == 0){ // == 0  find the end of the data
-          u8g_DrawStr(&u8g,72,(38+FONT_HEIGHT) + (index * 10),lineBuffer);//draw it
+          drawStr(72,(38+FONT_HEIGHT) + (index * 10),lineBuffer);//draw it
           index++;
           charIndex = 0; //reset index for next line
           memset(lineBuffer,0,sizeof(lineBuffer));//reset buffer
@@ -1057,16 +1082,16 @@ void weatherWidget(){
         }
       }
     } else {
-      u8g_DrawStr(&u8g,72,38+FONT_HEIGHT,weatherForecast);
+      drawStr(72,38+FONT_HEIGHT,weatherForecast);
     }
 
 
   } else {
     //print that weather is not available
-    u8g_SetFont(&u8g, u8g_font_7x14);
-    u8g_DrawStr(&u8g,70,34 + 3,"Weather");
-    u8g_DrawStr(&u8g,70,50 + 3,"Data N/A");
-    u8g_SetFont(&u8g, u8g_font_6x12);
+    // u8g_SetFont(&u8g, // u8g_font_7x14);
+    drawStr(70,34 + 3,"Weather");
+    drawStr(70,50 + 3,"Data N/A");
+    // u8g_SetFont(&u8g, // u8g_font_6x12);
   }
 }
 
@@ -1496,16 +1521,16 @@ void getTimeFromDevice(char message[], short len){
       }
      }
      //Read from the RTC
-     RTC.read(tm);
-     //Compare to time from Device(only minutes and hours doesn't have to be perfect)
-     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
-        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
-        Serial.println(F("Setting the clock!"));
-     } else {
-        //if it's correct we do not have to set the RTC and we just keep using the RTC's time
-        Serial.println(F("Clock is correct already!"));
-        gotUpdatedTime = true;
-     }
+//     RTC.read(tm);
+//     //Compare to time from Device(only minutes and hours doesn't have to be perfect)
+//     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
+//        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
+//        Serial.println(F("Setting the clock!"));
+//     } else {
+//        //if it's correct we do not have to set the RTC and we just keep using the RTC's time
+//        Serial.println(F("Clock is correct already!"));
+//        gotUpdatedTime = true;
+//     }
 
 }
 
@@ -1515,15 +1540,15 @@ void getTimeFromDevice(char message[], short len){
 
 void setAlarm(short alarmType, short hours, short minutes, short date,short month){
   short start = 0;
-  if(alarmType == 0){
-    RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
-    Serial.println("ALARM1 Set!");
-    start = ALARM_ADDRESS;
-  } else {
-    RTC.setAlarm(ALM2_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
-    Serial.println("ALARM2 Set!");
-    start = ALARM_ADDRESS + 4;
-  }
+//  if(alarmType == 0){
+//    RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
+//    Serial.println("ALARM1 Set!");
+//    start = ALARM_ADDRESS;
+//  } else {
+//    RTC.setAlarm(ALM2_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
+//    Serial.println("ALARM2 Set!");
+//    start = ALARM_ADDRESS + 4;
+//  }
   Serial.print("Starting write at address: ");
   Serial.println(start);
   saveToEEPROM(start,true); //set alarm active
@@ -1556,9 +1581,9 @@ void vibrate(short vibrationTime){
 }
 
 void saveToEEPROM(short address,short value){
-  if(address < EEPROM.length()){
+  //if(address < EEPROM.length()){
     EEPROM.write(address,value);
-  }
+  //}
 }
 
 short readFromEEPROM(short address){
@@ -1568,29 +1593,29 @@ short readFromEEPROM(short address){
 void drawTriangle(short x, short y, short size, short direction){
   // some triangle are miss-shapen need to fix
   switch (direction) {
-    case 1: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); break; //down
-    case 2: u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); break; //up
-    case 3: u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); break; // left
-    case 4: u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); break; // right
+    case 1: display.drawTriangle(x,y,x+size,y, x+(size/2), y+(size/2),WHITE); /* u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); */ break; //down
+    case 2: display.drawTriangle(x,y,x+size,y, x+(size/2), y-(size/2),WHITE);/* u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); */ break; //up
+    case 3: display.drawTriangle(x+size,y,x,y-(size/2),x+size,y-size,WHITE);/* u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); */ break; // left
+    case 4: display.drawTriangle(x + size,y-(size/2),x,y,x,y-size,WHITE);/* u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); */ break; // right
   }
 }
 
 void setClockTime(short hours,short minutes,short seconds, short days, short months, short years){
-  tm.Hour = hours;
-  tm.Minute = minutes;
-  tm.Second = seconds;
-  tm.Day = days;
-  tm.Month = months;
-  tm.Year = CalendarYrToTm(years);
-  t = makeTime(tm);
-
-  if(RTC.set(t) == 1) { // Success
-    setTime(t);
-    Serial.println(F("Writing time to RTC was successfull!"));
-    gotUpdatedTime= true;
-  } else {
-    Serial.println(F("Writing to clock failed!"));
-  }
+//  tm.Hour = hours;
+//  tm.Minute = minutes;
+//  tm.Second = seconds;
+//  tm.Day = days;
+//  tm.Month = months;
+//  tm.Year = CalendarYrToTm(years);
+//  t = makeTime(tm);
+//
+//  if(RTC.set(t) == 1) { // Success
+//    setTime(t);
+//    Serial.println(F("Writing time to RTC was successfull!"));
+//    gotUpdatedTime= true;
+//  } else {
+//    Serial.println(F("Writing to clock failed!"));
+//  }
 
 
 }
@@ -1674,11 +1699,12 @@ bool contains(char data[], char character, short lenOfData){
   return false;
 }
 
-short FreeRam() {
-  char top;
-  #ifdef __arm__
-    return &top - reinterpret_cast<char*>(sbrk(0));
-  #else  // __arm__
-    return __brkval ? &top - __brkval : &top - &__bss_end;
-  #endif  // __arm__
-}
+//short FreeRam() {
+//  char top;
+//  #ifdef __arm__
+//    return &top - reinterpret_cast<char*>(sbrk(0));
+//  #else  // __arm__
+//    return __brkval ? &top - __brkval : &top - &__bss_end;
+//  #endif  // __arm__
+//}
+

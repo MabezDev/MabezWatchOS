@@ -64,6 +64,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
     -(31/05/16) Switched all (bar one) ints to shorts and gather about 230 bytes of RAM extra, and saved storage space too
 
     -(30/11/2016) Moving to STM32 platform, starting conversion after weeks of trying to get the oled to play with it. Finally acheived that tonight but we need to switch to new GFX lib, should be a reasonalbel easy swap (hopefully)
+    -(01/12/2016) All software functionality back to previous state, need to hook up bluetooth and figure out a good way to do our own alarms and figure out capactive touch buttons?
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate

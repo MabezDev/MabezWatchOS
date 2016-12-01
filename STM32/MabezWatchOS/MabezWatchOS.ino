@@ -1,5 +1,5 @@
 #include <Arduino.h>
-
+#include <RTClock.h> 
 //#include <// u8g_i2c.h>
 //#include <i2c_t3.h>
 //#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
@@ -10,6 +10,12 @@
 #include<Adafruit_SH1106.h>
 
 #define HWSERIAL Serial1
+
+// Leap year calulator expects year argument as years offset from 1970
+#define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
+#define SECS_PER_MIN  (60UL)
+#define SECS_PER_HOUR (3600UL)
+#define SECS_PER_DAY  (SECS_PER_HOUR * 24UL)
 
 //needed for calculating Free RAM on ARM based MC's
 #ifdef __arm__
@@ -24,6 +30,8 @@
 
 // display object for sh11106
 Adafruit_SH1106 display(0);
+
+RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
 
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm.
@@ -177,7 +185,7 @@ short timeWeGotWeather[2] = {0,0};
 
 //time and date constants
 //tmElements_t tm;
-time_t t;
+//time_t t;
 const short PROGMEM clockRadius = 32;
 const short PROGMEM clockUpdateInterval = 1000;
 
@@ -196,6 +204,22 @@ typedef struct{
   short dateReceived[2];
   short textLength;
 } Notification;
+
+// time/date structure
+typedef struct TimeElements
+{ 
+  uint8_t Second; 
+  uint8_t Minute; 
+  uint8_t Hour; 
+  uint8_t Wday;   // Day of week, sunday is day 1
+  uint8_t Day;
+  uint8_t Month; 
+  uint8_t Year;   // Offset from 1970; 
+} TimeElements ; 
+
+uint32_t dateTime_t;
+TimeElements  tm;
+
 
 //notification vars
 short notificationIndex = 0;
@@ -369,6 +393,8 @@ void setup(void) {
   HWSERIAL.print("AT");
 
   Serial.println(F("MabezWatch OS Loaded!"));
+
+  getNotification("<n>com.mabezdev<t>Hello<e>Test you cunty<i>askhjdgahkjshdgasd<e>",64);
 }
 
 void u8g_prepare(void) {
@@ -376,7 +402,7 @@ void u8g_prepare(void) {
   // u8g_SetFont(&u8g, // u8g_font_6x12);
 }
 
-void drawStr(int x, int y, char* text){
+void drawStr(int x, int y, char const* text){
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(x,y);
@@ -391,15 +417,15 @@ void showMenu(short numberOfItems,void itemInMenuFunction(short),bool showSelect
   for(short i=0; i < numberOfItems + 1;i++){
     short startY = 0;
     if(i==menuSelector && showSelector){
-        // u8g_DrawStr(&u8g,0,y+Y_OFFSET+FONT_HEIGHT,">");
+        drawStr(0,y+Y_OFFSET+4,">");
     }
     if(i!=numberOfItems){
         itemInMenuFunction(i); //draw our custom menuItem
     } else {
-      // u8g_DrawStr(&u8g,x + 3,y + Y_OFFSET+FONT_HEIGHT, "Back");
+        drawStr(x + 3,y + Y_OFFSET + 4, "Back");
     }
     y += MENU_ITEM_HEIGHT;
-    // u8g_DrawFrame(&u8g,x,startY,128,y +Y_OFFSET);
+    display.drawRect(x,startY,128,y +Y_OFFSET,WHITE);
   }
   y = 0;
 }
@@ -414,20 +440,21 @@ void updateSystem(){
     prevMillis = currentInterval;
 
     //update RTC info
-//    RTC.read(tm);
-//    clockArray[0] = tm.Hour;
-//    clockArray[1] = tm.Minute;
-//    clockArray[2] = tm.Second;
-//    dateArray[0] = tm.Day;
-//    dateArray[1] = tm.Month;
-//    dateArray[2] = tmYearToCalendar(tm.Year);
-//    dateArray[3]  = tm.Wday;
+    breakTime(rt.getTime(),tm);
+    clockArray[0] = tm.Hour;
+    clockArray[1] = tm.Minute;
+    clockArray[2] = tm.Second;
+    dateArray[0] = tm.Day;
+    dateArray[1] = tm.Month;
+    dateArray[2] = tm.Year;
+    dateArray[3]  = tm.Wday;
 
 
     // update battery stuff
-    batteryVoltage = getBatteryVoltage();
-    batteryPercentage = ((batteryVoltage - 3.4)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts, after testing the cut off voltage is 3.4v
+    //batteryVoltage = getBatteryVoltage();
+    //batteryPercentage = ((batteryVoltage - 3.4)/1.2)*100; // Gives a percentage range between 4.2 and 3 volts, after testing the cut off voltage is 3.4v
                                                           // in furutire shout change to 3.5 and when we get to 0% "Shutdown" (deep sleep)
+    batteryPercentage = 89;
     isCharging = !digitalRead(CHARGING_STATUS_PIN);
 
     if((isCharging != prevIsCharging)){
@@ -587,7 +614,7 @@ void loop(void) {
     // modify the display in here
     
     if(loading > 0){
-      // u8g_DrawXBMP(&u8g,55,12,21,24,LOGO);
+      display.drawBitmap(55,12,LOGO,21,24,1);
       drawStr(42,55,"Loading...");
     } else {
       switch(pageIndex){
@@ -808,16 +835,16 @@ void alarmPage(){
 }
 
 void timerPage(){
-   drawStr(24,23,"H");
-   drawStr(54,23,"M");
-   drawStr(84,23,"S");
+   drawStr(24,18,"H");
+   drawStr(54,18,"M");
+   drawStr(84,18,"S");
 
   intTo2Chars(timerArray[0]);
-   drawStr(24,35,numberBuffer);
+   drawStr(24,28,numberBuffer);
   intTo2Chars(timerArray[1]);
-   drawStr(54,35,numberBuffer);
+   drawStr(54,28,numberBuffer);
   intTo2Chars(timerArray[2]);
-   drawStr(84,35,numberBuffer);
+   drawStr(84,28,numberBuffer);
 
   drawSelectors(timerIndex);
 
@@ -844,8 +871,8 @@ void drawSelectors(short index){
       case 0: drawTriangle(22,8,8,1); break;
       case 1: drawTriangle(52,8,8,1);break;
       case 2: drawTriangle(82,8,8,1); break;
-      case 3: display.drawRect(28,45,34,13,WHITE);break; //draw rectangle around this option
-      case 4: display.drawRect(68,45,34,13,WHITE); break; //draw rectangle around this option
+      case 3: display.drawRect(28,45 + 5,34,13,WHITE);break; //draw rectangle around this option
+      case 4: display.drawRect(68,45 + 5,34,13,WHITE); break; //draw rectangle around this option
     }
   }
 }
@@ -881,22 +908,22 @@ void settingsPage(){
 
 void notificationMenuPageItem(short position){
   //draw title
-   drawStr(x+3,y+Y_OFFSET+FONT_HEIGHT,notifications[position].title);
+   drawStr(x+3,y + Y_OFFSET + 4,notifications[position].title);
 
   // u8g_SetFont(&u8g, // u8g_font_04b_03);
   { //draw timestamp
     intTo2Chars(notifications[position].dateReceived[0]);
-     drawStr(x+95,y + Y_OFFSET ,numberBuffer);
-     drawStr(x+103,y + Y_OFFSET ,":");
+     drawStr(x+95,y + Y_OFFSET + 4 ,numberBuffer);
+     drawStr(x+103,y + Y_OFFSET + 4 ,":");
     intTo2Chars(notifications[position].dateReceived[1]);
-     drawStr(x+106,y + Y_OFFSET ,numberBuffer);
+     drawStr(x+106,y + Y_OFFSET + 4,numberBuffer);
   }
   // u8g_SetFont(&u8g, // u8g_font_6x12);
 }
 
 void settingsMenuItem(short position){
-  //drawStr(x+3,y+Y_OFFSET+FONT_HEIGHT,settingKey[position].c_str());
-  drawStr(x+3 + 104,y+Y_OFFSET+FONT_HEIGHT,itoa(settingValue[position],numberBuffer,10));
+  drawStr(x+3,y+Y_OFFSET + 4,settingKey[position].c_str());
+  drawStr(x+3 + 104,y+Y_OFFSET + 4,itoa(settingValue[position],numberBuffer,10));
 }
 
 
@@ -976,11 +1003,11 @@ void homePage(short hour, short minute,short second){
     case 0: timeDateWidget(); break;
     case 1: digitalClockWidget(); break;
     case 2: weatherWidget(); break;
-    case 3:  drawStr(70,39 + 3,"Messages"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Messages"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
-    case 4:  drawStr(80,39 + 3,"Timer"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,80,39 + 3,"Timer"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
-    case 5:  drawStr(70,39 + 3,"Settings"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Settings"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
-    case 6:  drawStr(73,42 + 3,"Reset"); /* u8g_SetFont(&u8g, // u8g_font_6x12); // u8g_DrawStr(&u8g,73,42 + 3,"Reset"); // u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); */ break;
-    case 7:  drawStr(75,42 + 3,"Alarms"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 3:  drawStr(70,36 + 3,"Messages"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Messages"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 4:  drawStr(80,36 + 3,"Timer"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,80,39 + 3,"Timer"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 5:  drawStr(70,36 + 3,"Settings"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Settings"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 6:  drawStr(73,36 + 3,"Reset"); display.drawBitmap(110,36,BLUETOOTH_CONNECTED,8,10,WHITE); /* u8g_SetFont(&u8g, // u8g_font_6x12); // u8g_DrawStr(&u8g,73,42 + 3,"Reset"); // u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); */ break;
+    case 7:  drawStr(75,36 + 3,"Alarms"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -992,27 +1019,27 @@ void homePage(short hour, short minute,short second){
 
   //notification indicator
 
-  drawStr(119,2 ,itoa(notificationIndex,numberBuffer,10));
+  drawStr(119,4 ,itoa(notificationIndex,numberBuffer,10));
 
   //battery voltage
   if(!isCharging && !isCharged){
     if(batteryPercentage != 100){
-      drawStr(77,11,itoa(batteryPercentage,numberBuffer,10));
-      drawStr(89,11,"%");
+      drawStr(77,4,itoa(batteryPercentage,numberBuffer,10));
+      drawStr(89,4,"%");
     }
   } else if(isCharged){
     //fully charged symbol here
-    // u8g_DrawXBMP(&u8g,79,1,14,12,CHARGED);
+    display.drawBitmap(79,1,CHARGED,14,12,WHITE);
   } else {
     //draw symbol to show that we are charging here
-    // u8g_DrawXBMP(&u8g,80,2,14,12,CHARGING);
+    display.drawBitmap(80,2,CHARGING,14,12,WHITE);
   }
 
   //connection icon
   if(isConnected){
-    // u8g_DrawXBMP(&u8g,102,2,8,10,BLUETOOTH_CONNECTED);
+    display.drawBitmap(102,2,BLUETOOTH_CONNECTED,8,10,WHITE);
   } else {
-    drawStr(102,11,"NC");
+    drawStr(102,4,"NC");
   }
 }
 
@@ -1022,54 +1049,45 @@ void homePage(short hour, short minute,short second){
 
 void timeDateWidget(){
   //display date from RTC
-  // u8g_SetFont(&u8g, // u8g_font_7x14);
-  //drawStr(72,20+14,days[dateArray[3] - 1].c_str());
+  drawStr(72,20+4,days[dateArray[3] - 1].c_str());
   intTo2Chars(dateArray[0]);
-  // u8g_DrawStr(&u8g,72,34+14,numberBuffer);
-  //drawStr(90,34+14,months[dateArray[1] - 1].c_str());
-  intTo2Chars(dateArray[2]);
-  drawStr(72,48+14,numberBuffer);
-  // u8g_SetFont(&u8g, // u8g_font_6x12);
+  drawStr(72,34+4,numberBuffer);
+  drawStr(90,34+4,months[dateArray[1] - 1].c_str());
+  intTo2Chars(dateArray[2] + 1970);
+  drawStr(72,48+4,numberBuffer);
 }
 
 void digitalClockWidget(){
-  // u8g_SetFont(&u8g, // u8g_font_7x14);
   display.drawRect(68,28,60,16,WHITE);
   intTo2Chars(clockArray[0]);
-  drawStr(69,28,numberBuffer);
-  drawStr(83,28,":");
+  drawStr(69,28 + 4,numberBuffer);
+  drawStr(83,28 + 4,":");
   intTo2Chars(clockArray[1]);
-  drawStr(91,28,numberBuffer);
-  drawStr(105,28,":");
+  drawStr(91,28 + 4,numberBuffer);
+  drawStr(105,28 + 4,":");
   intTo2Chars(clockArray[2]);
-  drawStr(113,28,numberBuffer);
-  // u8g_SetFont(&u8g, // u8g_font_6x12);
+  drawStr(113,28 + 4,numberBuffer);
 }
 
 void weatherWidget(){
   if(weatherData){
-    //change fonts
-    // u8g_SetFont(&u8g, // u8g_font_7x14);
-    drawStr(72,19+FONT_HEIGHT,weatherDay);
+    drawStr(72,19,weatherDay);
 
-    // u8g_SetFont(&u8g, // u8g_font_04b_03);
     intTo2Chars(timeWeGotWeather[0]);
     drawStr(105,15,numberBuffer);
     drawStr(113,15,":");
     intTo2Chars(timeWeGotWeather[1]);
     drawStr(116,15,numberBuffer);
 
-    // u8g_SetFont(&u8g, // u8g_font_6x12);
-
-    drawStr(72,28+FONT_HEIGHT,weatherTemperature);
-    drawStr(102,28+FONT_HEIGHT,"C");
+    drawStr(72,28,weatherTemperature);
+    drawStr(102,28,"C");
 
     short index = 0;
     charIndex = 0;
     if(contains(weatherForecast,' ',sizeof(weatherForecast))){
       for(short i=0; i < sizeof(weatherForecast); i++){
         if(weatherForecast[i]==' ' || weatherForecast[i] == 0){ // == 0  find the end of the data
-          drawStr(72,(38+FONT_HEIGHT) + (index * 10),lineBuffer);//draw it
+          drawStr(72,(38) + (index * 10),lineBuffer);//draw it
           index++;
           charIndex = 0; //reset index for next line
           memset(lineBuffer,0,sizeof(lineBuffer));//reset buffer
@@ -1082,7 +1100,7 @@ void weatherWidget(){
         }
       }
     } else {
-      drawStr(72,38+FONT_HEIGHT,weatherForecast);
+      drawStr(72,38,weatherForecast);
     }
 
 
@@ -1439,6 +1457,8 @@ void getWeatherData(char weatherItem[],short len){
   weatherData = true;
 }
 
+// <n>com.mabezdev<t>Hello<e>Test you cunty<i>askhjdgahkjshdgasd<e>
+
 void getNotification(char notificationItem[],short len){
   //split the <n>
   char *notPtr = notificationItem;
@@ -1598,6 +1618,89 @@ void drawTriangle(short x, short y, short size, short direction){
     case 3: display.drawTriangle(x+size,y,x,y-(size/2),x+size,y-size,WHITE);/* u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); */ break; // left
     case 4: display.drawTriangle(x + size,y-(size/2),x,y,x,y-size,WHITE);/* u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); */ break; // right
   }
+}
+
+void breakTime(uint32_t timeInput, struct TimeElements &tm){
+// Break the given time_t into time components
+// This is a more compact version of the C library localtime function
+// Note that year is offset from 1970 !!!
+
+  uint8_t year;
+  uint8_t month, monthLength;
+  uint32_t time;
+  unsigned long days;
+
+  time = (uint32_t)timeInput;
+  tm.Second = time % 60;
+  time /= 60; // Now it is minutes
+  tm.Minute = time % 60;
+  time /= 60; // Now it is hours
+  tm.Hour = time % 24;
+  time /= 24; // Now it is days
+  tm.Wday = ((time + 4) % 7) + 1;  // Sunday is day 1 
+  
+  year = 0;  
+  days = 0;
+  while((unsigned)(days += (LEAP_YEAR(year) ? 366 : 365)) <= time) {
+    year++;
+  }
+  tm.Year = year; // Year is offset from 1970 
+  
+  days -= LEAP_YEAR(year) ? 366 : 365;
+  time  -= days; // Now it is days in this year, starting at 0
+  
+  days=0;
+  month=0;
+  monthLength=0;
+  for (month=0; month<12; month++) {
+    if (month==1) { // February
+      if (LEAP_YEAR(year)) {
+        monthLength=29;
+      } else {
+        monthLength=28;
+      }
+    } else {
+      monthLength = dayInMonth[month];
+    }
+    
+    if (time >= monthLength) {
+      time -= monthLength;
+    } else {
+        break;
+    }
+  }
+  tm.Month = month + 1;  // Jan is month 1  
+  tm.Day = time + 1;     // Day of month
+}
+
+uint32_t makeTime(struct TimeElements &tm){   
+// Assemble time elements into "unix" format 
+// Note year argument is offset from 1970
+  
+  int i;
+  uint32_t seconds;
+
+  // Seconds from 1970 till 1 jan 00:00:00 of the given year
+  seconds= tm.Year*(SECS_PER_DAY * 365);
+  for (i = 0; i < tm.Year; i++) {
+    if (LEAP_YEAR(i)) {
+      seconds +=  SECS_PER_DAY;   // Add extra days for leap years
+    }
+  }
+  
+  // Add days for this year, months start from 1
+  for (i = 1; i < tm.Month; i++) {
+    if ( (i == 2) && LEAP_YEAR(tm.Year)) { 
+      seconds += SECS_PER_DAY * 29;
+    } else {
+      seconds += SECS_PER_DAY * dayInMonth[i-1];  // MonthDay array starts from 0
+    }
+  }
+  seconds+= (tm.Day-1) * SECS_PER_DAY;
+  seconds+= tm.Hour * SECS_PER_HOUR;
+  seconds+= tm.Minute * SECS_PER_MIN;
+  seconds+= tm.Second;
+  return (uint32_t)seconds; 
 }
 
 void setClockTime(short hours,short minutes,short seconds, short days, short months, short years){

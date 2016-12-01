@@ -1,15 +1,12 @@
 #include <Arduino.h>
 #include <RTClock.h> 
-//#include <// u8g_i2c.h>
-//#include <i2c_t3.h>
-//#include <DS1307RTC.h> //this works with out clock (DS3231) but we will have to implemnt our own alarm functions
 #include <EEPROM.h>
 #include <Time.h>
 #include<itoa.h>
 
 #include<Adafruit_SH1106.h>
 
-#define HWSERIAL Serial1
+#define HWSERIAL Serial2 // PA2 & PA3
 
 // Leap year calulator expects year argument as years offset from 1970
 #define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
@@ -224,8 +221,8 @@ TimeElements  tm;
 
 //notification vars
 short notificationIndex = 0;
-short PROGMEM notificationMax = 10;
-Notification notifications[10];
+short PROGMEM notificationMax = 20;
+Notification notifications[20];
 bool wantNotifications = true;
 bool shouldRemove = false;
 
@@ -312,7 +309,7 @@ const byte PROGMEM BLUETOOTH_CONNECTED[] = {
 short loading = 3; // time the loading screen is show for
 
 //drawing buffers used for character rendering
-char numberBuffer[3]; //2 numbers //cahnged to 3 till i find what is taking 3 digits and overflowing
+char numberBuffer[4]; //2 numbers //cahnged to 3 till i find what is taking 3 digits and overflowing
 const short charsThatFit = 20; //only with default font. 0-20 = 21 chars
 char lineBuffer[21]; // 21 chars                             ^^
 short charIndex = 0;
@@ -374,10 +371,10 @@ void setup(void) {
     settingValue[i] = readFromEEPROM(i);
   }
 
-  //eeprom reset
-  /*for(short j=0; j < EEPROM.length(); j ++){
-    saveToEEPROM(j,0);
-  }*/
+  //eeprom reset - for first time run
+//  for(short j=0; j < 128; j++){
+//    saveToEEPROM(j,0);
+//  }
 
   activeAlarms[0] = readFromEEPROM(ALARM_ADDRESS);
   activeAlarms[1] = readFromEEPROM(ALARM_ADDRESS + 5);
@@ -559,7 +556,7 @@ void updateSystem(){
     Serial.println(dateArray[2]);
 
     Serial.print(F("Free RAM:"));
-    //Serial.println(FreeRam());
+    Serial.println(FreeRam());
     Serial.println(F("=============================================="));
 
     //Alarm checks
@@ -771,14 +768,14 @@ void loop(void) {
 */
 
 void alarmPage(){
-   drawStr(24,23,"H");
-   drawStr(54,23,"M");
-   drawStr(84,23,"D");
+   drawStr(24,16,"H");
+   drawStr(54,16,"M");
+   drawStr(84,16,"D");
 
   intTo2Chars(alarmTime[0]);
-  drawStr(24,35,numberBuffer);
+  drawStr(20,28,numberBuffer);
   intTo2Chars(alarmTime[1]);
-  drawStr(54,35,numberBuffer);
+  drawStr(50,28,numberBuffer);
   //draw day of week set up to a week in advance
   short dayAhead = dateArray[3] - 1; //set current day
   for(short i = 0; i < alarmTime[2]; i++){ // add the exra days
@@ -814,7 +811,7 @@ void alarmPage(){
     prevAlarmToggle = alarmToggle;
   }
 
-  //drawStr(84,35,days[dayAhead]);
+  drawStr(74,28,days[dayAhead].c_str());
 
   if(alarmToggle == 0){
     drawStr(0,0 ,"One");
@@ -841,11 +838,11 @@ void timerPage(){
    drawStr(84,18,"S");
 
   intTo2Chars(timerArray[0]);
-   drawStr(24,28,numberBuffer);
+   drawStr(20,28,numberBuffer);
   intTo2Chars(timerArray[1]);
-   drawStr(54,28,numberBuffer);
+   drawStr(50,28,numberBuffer);
   intTo2Chars(timerArray[2]);
-   drawStr(84,28,numberBuffer);
+   drawStr(80,28,numberBuffer);
 
   drawSelectors(timerIndex);
 
@@ -973,9 +970,9 @@ void homePage(short hour, short minute,short second){
    drawStr(53,32,"3");
 
   if(clockArray[0] > 12){
-     drawStr(0,64,"PM");
+     drawStr(10,64,"PM");
   } else {
-     drawStr(0,64,"AM");
+     drawStr(10,64,"AM");
   }
 
 
@@ -1004,19 +1001,19 @@ void homePage(short hour, short minute,short second){
     case 0: timeDateWidget(); break;
     case 1: digitalClockWidget(); break;
     case 2: weatherWidget(); break;
-    case 3:  drawStr(70,36 + 3,"Messages"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Messages"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
-    case 4:  drawStr(80,36 + 3,"Timer"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,80,39 + 3,"Timer"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
-    case 5:  drawStr(70,36 + 3,"Settings"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,70,39 + 3,"Settings"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
-    case 6:  drawStr(73,36 + 3,"Reset"); display.drawBitmap(110,36,BLUETOOTH_CONNECTED,8,10,WHITE); /* u8g_SetFont(&u8g, // u8g_font_6x12); // u8g_DrawStr(&u8g,73,42 + 3,"Reset"); // u8g_DrawXBMP(&u8g,110,36,8,10,BLUETOOTH_CONNECTED); */ break;
-    case 7:  drawStr(75,36 + 3,"Alarms"); /* u8g_SetFont(&u8g, // u8g_font_7x14); // u8g_DrawStr(&u8g,75,42 + 3,"Alarms"); // u8g_SetFont(&u8g, // u8g_font_6x12); */ break;
+    case 3:  drawStr(70,36 + 3,"Messages"); break;
+    case 4:  drawStr(80,36 + 3,"Timer"); break;
+    case 5:  drawStr(70,36 + 3,"Settings"); break;
+    case 6:  drawStr(73,36 + 3,"Reset"); display.drawBitmap(110,36,BLUETOOTH_CONNECTED,8,10,WHITE); break;
+    case 7:  drawStr(75,36 + 3,"Alarms"); break;
   }
 
   //status bar - 15 px high for future icon ref
   display.drawRect(75,0,53,15,WHITE);
   //separator line between notifications and bt icon on the status bar
-  display.drawRect(116,0,116,14,WHITE);
+  display.drawRect(116,0,116,15,WHITE);
   //batt voltage and connection separator
-  display.drawRect(97,0,97,14,WHITE);
+  display.drawRect(97,0,97,15,WHITE);
 
   //notification indicator
 
@@ -1061,13 +1058,13 @@ void timeDateWidget(){
 void digitalClockWidget(){
   display.drawRect(68,28,60,16,WHITE);
   intTo2Chars(clockArray[0]);
-  drawStr(69,28 + 4,numberBuffer);
-  drawStr(83,28 + 4,":");
+  drawStr(70,29 + 4,numberBuffer);
+  drawStr(84,29 + 4,":");
   intTo2Chars(clockArray[1]);
-  drawStr(91,28 + 4,numberBuffer);
-  drawStr(105,28 + 4,":");
+  drawStr(92,29 + 4,numberBuffer);
+  drawStr(106,29 + 4,":");
   intTo2Chars(clockArray[2]);
-  drawStr(113,28 + 4,numberBuffer);
+  drawStr(114,29 + 4,numberBuffer);
 }
 
 void weatherWidget(){
@@ -1108,8 +1105,8 @@ void weatherWidget(){
   } else {
     //print that weather is not available
     // u8g_SetFont(&u8g, // u8g_font_7x14);
-    drawStr(70,34 + 3,"Weather");
-    drawStr(70,50 + 3,"Data N/A");
+    drawStr(70,24,"Weather");
+    drawStr(70,40,"Data N/A");
     // u8g_SetFont(&u8g, // u8g_font_6x12);
   }
 }
@@ -1778,7 +1775,7 @@ void intTo2Chars(short number){
   if(number < 10){
     //not working atm
     numberBuffer[0] = '0';
-    numberBuffer[1] = (number + 48);
+    numberBuffer[1] = char(number + 48);
 
   } else {
     itoa(number,numberBuffer,10);
@@ -1803,12 +1800,12 @@ bool contains(char data[], char character, short lenOfData){
   return false;
 }
 
-//short FreeRam() {
-//  char top;
-//  #ifdef __arm__
-//    return &top - reinterpret_cast<char*>(sbrk(0));
-//  #else  // __arm__
-//    return __brkval ? &top - __brkval : &top - &__bss_end;
-//  #endif  // __arm__
-//}
+short FreeRam() {
+  char top;
+  #ifdef __arm__
+    return &top - reinterpret_cast<char*>(sbrk(0));
+  #else  // __arm__
+    return __brkval ? &top - __brkval : &top - &__bss_end;
+  #endif  // __arm__
+}
 

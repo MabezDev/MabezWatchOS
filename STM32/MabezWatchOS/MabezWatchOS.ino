@@ -6,7 +6,7 @@
 
 #include<Adafruit_SH1106.h>
 
-#define HWSERIAL Serial2 // PA2 & PA3
+#define HWSERIAL Serial //change back to Serial2 when we use bluetooth // PA2 & PA3
 
 // Leap year calulator expects year argument as years offset from 1970
 #define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
@@ -62,6 +62,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
 
     -(30/11/2016) Moving to STM32 platform, starting conversion after weeks of trying to get the oled to play with it. Finally acheived that tonight but we need to switch to new GFX lib, should be a reasonalbel easy swap (hopefully)
     -(01/12/2016) All software functionality back to previous state, need to hook up bluetooth and figure out a good way to do our own alarms and figure out capactive touch buttons?
+    -(02/12/2016) Fixed all functionality witht he RTC, checked and the main loop still receives messages perfectly, waiting for hm-11 to do a full test with the app
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate
@@ -125,6 +126,11 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
           - hibernate current = 240/0.344 = 697 Hours, need to power BT moudle from a pin, and turn off before going into low power, also blank the oled so no current draw there
              - bt module draws about 7.5  ma, so we need as high current pin, probably pin 5
       - add hardware power on/off
+
+      - STM32 ToDo Specfifics
+      - http://stm32duino.com/viewtopic.php?t=610 - implement some power saving techniques like the ones here
+      - fix bug with alarms times being read in and the day of week changing
+      - add alarm symbol on homepage to show its set
 
 
  */
@@ -315,8 +321,17 @@ char lineBuffer[21]; // 21 chars                             ^^
 short charIndex = 0;
 
 //alarm vars
-bool activeAlarms[2] = {false,false};
-short alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
+typedef struct Alm {
+  short alarmTime[3] = {0,0,0};
+  uint32_t time;
+  bool active = false;
+  String name;
+} Alm;
+Alm alarms[2];
+TimeElements alarmTm;
+//bool activeAlarms[2] = {false,false};
+ //alarm time: hours, mins, dateDay
+//short alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
 const short PROGMEM alarmMaxValues[3] = {23,59,6};
 short alarmToggle = 0; // alarm1 = 0, alarm2 = 1
 short prevAlarmToggle = 1;
@@ -376,8 +391,13 @@ void setup(void) {
 //    saveToEEPROM(j,0);
 //  }
 
-  activeAlarms[0] = readFromEEPROM(ALARM_ADDRESS);
-  activeAlarms[1] = readFromEEPROM(ALARM_ADDRESS + 5);
+  alarms[0].active = readFromEEPROM(ALARM_ADDRESS);
+  alarms[1].active = readFromEEPROM(ALARM_ADDRESS + 5);
+
+  alarms[0].name = "Alarm One";
+  alarms[1].name = "Alarm Two";
+
+  alarmTm.Second = 0;
 
   messagePtr = &message[0]; // could have used messagePtr = message
 
@@ -392,6 +412,7 @@ void setup(void) {
 
   Serial.println(F("MabezWatch OS Loaded!"));
 
+  // test notification
   getNotification("<n>com.mabezdev<t>Hello<e>Test you cunty<i>askhjdgahkjshdgasd<e>",64);
 }
 
@@ -507,7 +528,7 @@ void updateSystem(){
       }
     }
 
-    Serial.println(F("=============================================="));
+    /* Serial.println(F("=============================================="));
     if(isConnected){
       connectedTime++;
       Serial.print(F("Connected for "));
@@ -539,7 +560,7 @@ void updateSystem(){
     } else {
       Serial.println("Not Active");
     }
-
+    
     Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
     Serial.print(F("Time: "));
@@ -558,6 +579,7 @@ void updateSystem(){
     Serial.print(F("Free RAM:"));
     Serial.println(FreeRam());
     Serial.println(F("=============================================="));
+    */
 
     //Alarm checks
 //    if(activeAlarms[0]){
@@ -577,13 +599,33 @@ void updateSystem(){
 //      }
 //    }
 
+    // check alarms here
+    for(int i=0; i < 2; i++){
+      if(alarms[i].active){
+        // need to check if the current time is greater than our combined alarm time (i.e use makeTime() to calculate which number is greater)
+        Serial.print("Current time: ");
+        Serial.println(makeTime(tm));
+        Serial.print("Alarms time: ");
+        Serial.println(alarms[i].time);
+        if(makeTime(tm) >= alarms[i].time){
+          //alarm has gone off
+          createAlert(alarms[i].name.c_str(),6,10);
+          Serial.print(alarms[i].name);
+          Serial.println(" HAS GONE OFF");
+          alarms[i].active = false;
+          short address = i == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + 5;
+          saveToEEPROM(address,alarms[i].active);
+        }
+      }
+    }
 
-    HWSERIAL.print("<b>");
-    HWSERIAL.print(batteryPercentage);
-    HWSERIAL.print(",");
-    HWSERIAL.print(batteryVoltage);
-    HWSERIAL.print(",");
-    HWSERIAL.print(isCharging);
+
+//    HWSERIAL.print("<b>");
+//    HWSERIAL.print(batteryPercentage);
+//    HWSERIAL.print(",");
+//    HWSERIAL.print(batteryVoltage);
+//    HWSERIAL.print(",");
+//    HWSERIAL.print(isCharging);
   }
 
   if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
@@ -670,6 +712,7 @@ void loop(void) {
         }
       if(!receiving && startsWith(message,"<",1)){
         receiving = true;
+        Serial.println("Receiving!");
       }else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
         Serial.println(F("Message data missing, ignoring."));
         //we never recieved the end tag of a previous message
@@ -705,6 +748,7 @@ void loop(void) {
         }
       }
       if(!startsWith(message,"<f>",3)){
+        Serial.println("Found the end of a message");
         if(startsWith(message,"<i>",3)){
           // move pointer on to remove out first 3 chars
           messagePtr += 3;
@@ -772,13 +816,13 @@ void alarmPage(){
    drawStr(54,16,"M");
    drawStr(84,16,"D");
 
-  intTo2Chars(alarmTime[0]);
+  intTo2Chars(alarms[alarmToggle].alarmTime[0]);
   drawStr(20,28,numberBuffer);
-  intTo2Chars(alarmTime[1]);
+  intTo2Chars(alarms[alarmToggle].alarmTime[1]);
   drawStr(50,28,numberBuffer);
   //draw day of week set up to a week in advance
   short dayAhead = dateArray[3] - 1; //set current day
-  for(short i = 0; i < alarmTime[2]; i++){ // add the exra days
+  for(short i = 0; i < alarms[alarmToggle].alarmTime[2]; i++){ // add the exra days
     dayAhead++;
     if(dayAhead > 6){
       dayAhead = 0;
@@ -787,27 +831,44 @@ void alarmPage(){
 
   //check if alarms are active
   if(alarmToggle!=prevAlarmToggle){
-    for(short k = 0; k < 2; k++){
-      alarmTime[k] = 0;
+    for(short k=0; k < 2; k++){
+        alarms[alarmToggle].alarmTime[k] = 0;
     }
     short address = 0;
-    if(alarmToggle == 0 && activeAlarms[alarmToggle]){
+    if(alarmToggle == 0 && alarms[alarmToggle].active){
       address = ALARM_ADDRESS + 1;
-    } else if(alarmToggle == 1 && activeAlarms[alarmToggle]) {
+    } else if(alarmToggle == 1 && alarms[alarmToggle].active) {
       address = ALARM_ADDRESS + 5;
     }
-    alarmTime[0] = readFromEEPROM(address);
-    address++;
-    alarmTime[1] = readFromEEPROM(address);
-    address++;
-    short date = readFromEEPROM(address);
-    address++;
-    short monthSet = readFromEEPROM(address);
+    alarms[alarmToggle].time = EEPROMReadlong(address);
+    Serial.println("Time from EEPROM: ");
+    Serial.print(alarms[alarmToggle].time);
+    breakTime(alarms[alarmToggle].time,alarmTm);
+    alarms[alarmToggle].alarmTime[0] = alarmTm.Hour;
+    alarms[alarmToggle].alarmTime[1] = alarmTm.Minute;
+    short date = alarmTm.Day;
+    short monthSet = alarmTm.Month;
     if(date == dateArray[0]){
-      alarmTime[2] = 0;
+      alarms[alarmToggle].alarmTime[2] = 0;
     } else {
-      alarmTime[2] = (date + dayInMonth[monthSet - 1]) - dateArray[0];
+      alarms[alarmToggle].alarmTime[2] = (date + dayInMonth[monthSet - 1]) - dateArray[0];
     }
+
+    Serial.println("Read alarm set for: ");
+    Serial.println("Time: ");
+    Serial.print(alarms[alarmToggle].alarmTime[0]);
+    Serial.print(":");
+    Serial.print(alarms[alarmToggle].alarmTime[1]);
+    Serial.println(":0");
+    Serial.println("Date: ");
+    Serial.print(date);
+    Serial.print("/");
+    Serial.print(monthSet);
+    Serial.print("/");
+    Serial.print(alarmTm.Year);
+   
+      
+      
     prevAlarmToggle = alarmToggle;
   }
 
@@ -820,7 +881,7 @@ void alarmPage(){
   }
 
 
-  if(!activeAlarms[alarmToggle]){
+  if(!alarms[alarmToggle].active){
      drawStr(34,54,"Set");
   } else {
      drawStr(30,54,"Unset");
@@ -1189,9 +1250,9 @@ void handleUpInput(){
     }
   } else if(pageIndex == ALARM_PAGE){
     if(locked){
-      alarmTime[alarmIndex]++;
-      if(alarmTime[alarmIndex] > alarmMaxValues[alarmIndex]){
-        alarmTime[alarmIndex] = alarmMaxValues[alarmIndex];
+      alarms[alarmToggle].alarmTime[alarmIndex]++;
+      if(alarms[alarmToggle].alarmTime[alarmIndex] > alarmMaxValues[alarmIndex]){
+        alarms[alarmToggle].alarmTime[alarmIndex] = alarmMaxValues[alarmIndex];
       }
     } else {
       alarmIndex++;
@@ -1267,9 +1328,9 @@ void handleDownInput(){
     }
   } else if(pageIndex == ALARM_PAGE){
     if(locked){
-      alarmTime[alarmIndex]--;
-      if(alarmTime[alarmIndex] < 0){
-        alarmTime[alarmIndex] = 0;
+      alarms[alarmToggle].alarmTime[alarmIndex]--;
+      if(alarms[alarmToggle].alarmTime[alarmIndex] < 0){
+        alarms[alarmToggle].alarmTime[alarmIndex] = 0;
       }
     } else {
       alarmIndex--;
@@ -1345,16 +1406,16 @@ void handleOkInput(){
   } else if(pageIndex == ALARM_PAGE){
     //handle alarmInput
     if(alarmIndex == 3){
-      activeAlarms[alarmToggle] = !activeAlarms[alarmToggle];
-      if(activeAlarms[alarmToggle]){
-        if((dateArray[0] + alarmTime[2]) > dayInMonth[dateArray[1] - 1]){
-          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], ((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1]),dateArray[1]); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
+      alarms[alarmToggle].active = !alarms[alarmToggle].active;
+      if(alarms[alarmToggle].active){
+        if((dateArray[0] + alarms[alarmToggle].alarmTime[2]) > dayInMonth[dateArray[1] - 1]){
+          setAlarm(alarmToggle, alarms[alarmToggle].alarmTime[0], alarms[alarmToggle].alarmTime[1], ((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]),dateArray[1],dateArray[2]); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
           Serial.print("Alarm set for the : ");
-          Serial.println(((dateArray[0] + alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
+          Serial.println(((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
         } else {
-          setAlarm(alarmToggle, alarmTime[0], alarmTime[1], (dateArray[0] + alarmTime[2]),dateArray[1]);
+          setAlarm(alarmToggle, alarms[alarmToggle].alarmTime[0], alarms[alarmToggle].alarmTime[1], (dateArray[0] + alarms[alarmToggle].alarmTime[2]),dateArray[1],dateArray[2]);
           Serial.print("Alarm set for the : ");
-          Serial.println((dateArray[0] + alarmTime[2]));
+          Serial.println((dateArray[0] + alarms[alarmToggle].alarmTime[2]));
         }
 
       }
@@ -1538,17 +1599,18 @@ void getTimeFromDevice(char message[], short len){
         }
       }
      }
+     
      //Read from the RTC
-//     RTC.read(tm);
-//     //Compare to time from Device(only minutes and hours doesn't have to be perfect)
-//     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
-//        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
-//        Serial.println(F("Setting the clock!"));
-//     } else {
-//        //if it's correct we do not have to set the RTC and we just keep using the RTC's time
-//        Serial.println(F("Clock is correct already!"));
-//        gotUpdatedTime = true;
-//     }
+     breakTime(rt.getTime(),tm);
+     //Compare to time from Device(only minutes and hours doesn't have to be perfect)
+     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
+        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
+        Serial.println(F("Setting the clock!"));
+     } else {
+        //if it's correct we do not have to set the RTC and we just keep using the RTC's time
+        Serial.println(F("Clock is correct already!"));
+        gotUpdatedTime = true;
+     }
 
 }
 
@@ -1556,8 +1618,8 @@ void getTimeFromDevice(char message[], short len){
 * System methods
 */
 
-void setAlarm(short alarmType, short hours, short minutes, short date,short month){
-  short start = 0;
+void setAlarm(short alarmType, short hours, short minutes, short date,short month,short year){
+  short start = alarmType == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + 5;
 //  if(alarmType == 0){
 //    RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
 //    Serial.println("ALARM1 Set!");
@@ -1567,20 +1629,44 @@ void setAlarm(short alarmType, short hours, short minutes, short date,short mont
 //    Serial.println("ALARM2 Set!");
 //    start = ALARM_ADDRESS + 4;
 //  }
+
+  /*
+   * As our RTC not longer has alarm functionality we need to write it in software, this should be pretty simple as we already wrote the values to eeprom
+   * instead of checking if the interrupt has gone off we should just check current time/date with the alarms ones, make sure not to miss it though!
+   */
+  Serial.println("Setting alarm for: ");
+  Serial.print("Time: ");
+  Serial.print(hours);
+  Serial.print(":");
+  Serial.print(minutes);
+  Serial.println(":0");
+  Serial.print("Date: ");
+  Serial.print(date);
+  Serial.print("/");
+  Serial.print(month);
+  Serial.print("/");
+  Serial.print(year);
+  Serial.println();
+   
+  uint32_t time;
+  alarmTm.Hour = hours;
+  alarmTm.Minute = minutes;
+  alarmTm.Day = date;
+  alarmTm.Month = month;
+  alarmTm.Second = 0;
+  alarmTm.Year = year; // - 1970
+  time = makeTime(alarmTm);
+  alarms[alarmType].time = time;
+  Serial.print("Alarm makeTime: ");
+  Serial.println(alarms[alarmType].time);
   Serial.print("Starting write at address: ");
   Serial.println(start);
   saveToEEPROM(start,true); //set alarm active
   start++;
-  saveToEEPROM(start,hours);
-  start++;
-  saveToEEPROM(start,minutes);
-  start++;
-  saveToEEPROM(start,date);
-  start++;
-  saveToEEPROM(start,month);
+  EEPROMWritelong(start,time);// need to write long
 }
 
-void createAlert(char text[],short len, short vibrationTime){
+void createAlert(char const* text,short len, short vibrationTime){
   if(len < 20){
     lastPage = pageIndex;
     alertTextLen = len;
@@ -1702,23 +1788,25 @@ uint32_t makeTime(struct TimeElements &tm){
 }
 
 void setClockTime(short hours,short minutes,short seconds, short days, short months, short years){
-//  tm.Hour = hours;
-//  tm.Minute = minutes;
-//  tm.Second = seconds;
-//  tm.Day = days;
-//  tm.Month = months;
-//  tm.Year = CalendarYrToTm(years);
-//  t = makeTime(tm);
-//
-//  if(RTC.set(t) == 1) { // Success
-//    setTime(t);
-//    Serial.println(F("Writing time to RTC was successfull!"));
-//    gotUpdatedTime= true;
-//  } else {
-//    Serial.println(F("Writing to clock failed!"));
-//  }
-
-
+  tm.Hour = hours;
+  tm.Minute = minutes;
+  tm.Second = seconds;
+  tm.Day = days;
+  tm.Month = months;
+  tm.Year = years - 1970; //offset
+  Serial.print(F("Time: "));
+    Serial.print(clockArray[0]);
+    Serial.print(F(":"));
+    Serial.print(clockArray[1]);
+    Serial.print(F(":"));
+    Serial.print(clockArray[2]);
+    Serial.print(F("    Date: "));
+    Serial.print(dateArray[0]);
+    Serial.print(F("/"));
+    Serial.print(dateArray[1]);
+    Serial.print(F("/"));
+    Serial.println(dateArray[2]);
+  rt.setTime(makeTime(tm));
 }
 
 void resetBTModule(){
@@ -1769,6 +1857,39 @@ float getBatteryVoltage(){
 /*
 * Utility methods
 */
+
+//This function will write a 4 byte (32bit) long to the eeprom at
+//the specified address to address + 3.
+void EEPROMWritelong(int address, long value)
+      {
+      //Decomposition from a long to 4 bytes by using bitshift.
+      //One = Most significant -> Four = Least significant byte
+      byte four = (value & 0xFF);
+      byte three = ((value >> 8) & 0xFF);
+      byte two = ((value >> 16) & 0xFF);
+      byte one = ((value >> 24) & 0xFF);
+
+      //Write the 4 bytes into the eeprom memory.
+      EEPROM.write(address, four);
+      EEPROM.write(address + 1, three);
+      EEPROM.write(address + 2, two);
+      EEPROM.write(address + 3, one);
+      }
+
+//This function will return a 4 byte (32bit) long from the eeprom
+//at the specified address to address + 3.
+long EEPROMReadlong(long address)
+      {
+      //Read the 4 bytes from the eeprom memory.
+      long four = EEPROM.read(address);
+      long three = EEPROM.read(address + 1);
+      long two = EEPROM.read(address + 2);
+      long one = EEPROM.read(address + 3);
+
+      //Return the recomposed long by using bitshift.
+      return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
+      }
+
 
 void intTo2Chars(short number){
   memset(numberBuffer,0,sizeof(numberBuffer));

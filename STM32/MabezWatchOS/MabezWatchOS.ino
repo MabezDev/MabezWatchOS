@@ -131,6 +131,8 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
       - http://stm32duino.com/viewtopic.php?t=610 - implement some power saving techniques like the ones here
       - fix bug with alarms times being read in and the day of week changing
       - add alarm symbol on homepage to show its set
+      - currently alarms can be set in the past, once we have a back up battery, implement checks to stop this
+      - second alarm not saving or loaded to eeprom correctly, investigate
 
 
  */
@@ -143,7 +145,7 @@ bool lastb_up = false;
 bool button_down = false;
 bool lastb_down = false;
 
-#define CONFIRMATION_TIME 80 //length in time the button has to be pressed for it to be a valid press
+#define CONFIRMATION_TIME 0 //80 change back when we go back to capactive //length in time the button has to be pressed for it to be a valid press
 #define INPUT_TIME_OUT 60000 //60 seconds
 #define TOUCH_THRESHOLD 1200 // value will change depending on the capacitance of the material
 
@@ -306,6 +308,8 @@ short alertTextLen = 0;
 short alertVibrationCount = 0;
 bool vibrating = false;
 long prevAlertMillis = 0;
+// only supports the timestamp for one alert currently
+short alertRecieved[2] = {0,0};
 
 //icons
 const byte PROGMEM BLUETOOTH_CONNECTED[] = {
@@ -603,15 +607,23 @@ void updateSystem(){
     for(int i=0; i < 2; i++){
       if(alarms[i].active){
         // need to check if the current time is greater than our combined alarm time (i.e use makeTime() to calculate which number is greater)
-        Serial.print("Current time: ");
-        Serial.println(makeTime(tm));
-        Serial.print("Alarms time: ");
-        Serial.println(alarms[i].time);
-        if(makeTime(tm) >= alarms[i].time){
-          //alarm has gone off
-          createAlert(alarms[i].name.c_str(),6,10);
-          Serial.print(alarms[i].name);
-          Serial.println(" HAS GONE OFF");
+//        Serial.print("Current time: ");
+//        Serial.println(makeTime(tm));
+//        Serial.print("Alarms time: ");
+//        Serial.println(alarms[i].time);
+        long difference = makeTime(tm) - alarms[i].time;
+        Serial.print(alarms[i].name);
+        Serial.print(", Time till alert: ");
+        Serial.println(difference);
+        //check if alarm has gone off
+        if(difference > 0){
+          // if the alarm has gone off within the last minute, create and alert else just turn off the alarm
+          if(difference <= 60){
+            createAlert(alarms[i].name.c_str(),9,10);
+            Serial.print(alarms[i].name);
+            Serial.println(" HAS GONE OFF");
+            Serial.println("Creating alert!");
+          } 
           alarms[i].active = false;
           short address = i == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + 5;
           saveToEEPROM(address,alarms[i].active);
@@ -866,6 +878,7 @@ void alarmPage(){
     Serial.print(monthSet);
     Serial.print("/");
     Serial.print(alarmTm.Year);
+    Serial.println();
    
       
       
@@ -937,11 +950,18 @@ void drawSelectors(short index){
 }
 
 void alertPage(){
-  // u8g_SetFont(&u8g, // u8g_font_6x12);
+  // draw the message
   short xOffset = (alertTextLen * 6)/2;
-   drawStr(64 - xOffset, 32,alertText);
-   drawStr(64 - 60, 50,"Press OK to dismiss.");
-  //remeber to add vibrate if needed
+  drawStr(64 - xOffset, 12,alertText);
+  drawStr(4, 50,"Press OK to dismiss.");
+  //draw timestamp
+  short centreY = 32;
+  intTo2Chars(alertRecieved[0]);
+  drawStr(64 - 15, centreY,numberBuffer);
+  drawStr(64 - 3 ,centreY,":");
+  intTo2Chars(alertRecieved[1]);
+  drawStr(64 + 3,centreY,numberBuffer);
+  
 }
 
 void notificationMenuPage(){
@@ -967,17 +987,14 @@ void settingsPage(){
 
 void notificationMenuPageItem(short position){
   //draw title
-   drawStr(x+3,y + Y_OFFSET + 4,notifications[position].title);
+  drawStr(x+3,y + Y_OFFSET + 4,notifications[position].title);
 
-  // u8g_SetFont(&u8g, // u8g_font_04b_03);
-  { //draw timestamp
-    intTo2Chars(notifications[position].dateReceived[0]);
-     drawStr(x+95,y + Y_OFFSET + 4 ,numberBuffer);
-     drawStr(x+103,y + Y_OFFSET + 4 ,":");
-    intTo2Chars(notifications[position].dateReceived[1]);
-     drawStr(x+106,y + Y_OFFSET + 4,numberBuffer);
-  }
-  // u8g_SetFont(&u8g, // u8g_font_6x12);
+  //draw timestamp
+  intTo2Chars(notifications[position].dateReceived[0]);
+  drawStr(x+95,y + Y_OFFSET + 4 ,numberBuffer);
+  drawStr(x+103,y + Y_OFFSET + 4 ,":");
+  intTo2Chars(notifications[position].dateReceived[1]);
+  drawStr(x+106,y + Y_OFFSET + 4,numberBuffer);
 }
 
 void settingsMenuItem(short position){
@@ -1673,6 +1690,9 @@ void createAlert(char const* text,short len, short vibrationTime){
     for(short i =0; i < len; i++){
       alertText[i] = text[i];
     }
+    // set the timestamp
+    alertRecieved[0] = clockArray[0];
+    alertRecieved[1] = clockArray[1];
     vibrate(vibrationTime);
     pageIndex = ALERT;
   } else {

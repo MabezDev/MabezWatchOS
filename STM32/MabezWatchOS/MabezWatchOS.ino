@@ -4,9 +4,10 @@
 #include <Time.h>
 #include<itoa.h>
 
+// #include<MAX17043.h> // will be using this as our lipo monitor
 #include<Adafruit_SH1106.h>
 
-#define HWSERIAL Serial //change back to Serial2 when we use bluetooth // PA2 & PA3
+#define HWSERIAL Serial2 //change back to Serial2 when we use bluetooth // PA2 & PA3
 
 // Leap year calulator expects year argument as years offset from 1970
 #define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
@@ -134,6 +135,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
         - currently alarms can be set in the past, once we have a back up battery, implement checks to stop this
         - second alarm not saving or loaded to eeprom correctly, investigate[DONE]
         - Add a toggle to have a same alarm everyday
+        - correct the display of the loading logo
 
 
  */
@@ -170,6 +172,7 @@ long prevButtonPressed = 0;
 char message[100]; // serial read buffer
 char *messagePtr; //this could be local to the receiving loop
 char finalData[250];//data set buffer
+const short MAX_PAYLOAD_LENGTH = 250 - 1; // must equal the length of finalData - 1, which inturn is the sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
 short finalDataIndex = 0; //index is required as we dunno when we stop
 short messageIndex = 0;
 bool readyToProcess = false;
@@ -182,6 +185,21 @@ String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Se
 String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
 const short PROGMEM dayInMonth[12] = {31,28,31,30,31,30,31,31,30,31,30,31}; //does not account for leap year
 
+// time/date structure
+typedef struct TimeElements
+{ 
+  uint8_t Second; 
+  uint8_t Minute; 
+  uint8_t Hour; 
+  uint8_t Wday;   // Day of week, sunday is day 1
+  uint8_t Day;
+  uint8_t Month; 
+  uint8_t Year;   // Offset from 1970; 
+} TimeElements ; 
+
+uint32_t dateTime_t;
+TimeElements  tm;
+
 //weather vars
 bool weatherData = false;
 char weatherDay[4];
@@ -189,10 +207,6 @@ char weatherTemperature[4];
 char weatherForecast[25];
 short timeWeGotWeather[2] = {0,0};
 
-
-//time and date constants
-//tmElements_t tm;
-//time_t t;
 const short PROGMEM clockRadius = 32;
 const short PROGMEM clockUpdateInterval = 1000;
 
@@ -212,37 +226,21 @@ typedef struct{
   short textLength;
 } Notification;
 
-// time/date structure
-typedef struct TimeElements
-{ 
-  uint8_t Second; 
-  uint8_t Minute; 
-  uint8_t Hour; 
-  uint8_t Wday;   // Day of week, sunday is day 1
-  uint8_t Day;
-  uint8_t Month; 
-  uint8_t Year;   // Offset from 1970; 
-} TimeElements ; 
-
-uint32_t dateTime_t;
-TimeElements  tm;
-
-
 //notification vars
 short notificationIndex = 0;
-short PROGMEM notificationMax = 20;
-Notification notifications[20];
+const short notificationMax = 30; // can increase this or increase the text size as we have 20kb RAM on the STM32
+Notification notifications[notificationMax]; 
 bool wantNotifications = true;
 bool shouldRemove = false;
 
-//pin constants
+//pin constants - most of these will need to be adjusted for the STM32F1
 const short PROGMEM OK_BUTTON = PB4;
 const short PROGMEM DOWN_BUTTON = PB3;
 const short PROGMEM UP_BUTTON = PB5;
 const short PROGMEM BATT_READ = 0;
 const short PROGMEM VIBRATE_PIN = 10;
 const short PROGMEM CHARGING_STATUS_PIN = 9;
-const short PROGMEM BT_POWER = 21; // pin 5 is broken, need to reflow? as voltage is only 1.3v
+const short PROGMEM BT_POWER = 21; 
 
 //navigation constants
 const short PROGMEM HOME_PAGE = 0;
@@ -251,7 +249,6 @@ const short PROGMEM NOTIFICATION_BIG = 2;
 const short PROGMEM TIMER = 4;
 const short PROGMEM SETTINGS = 5;
 const short PROGMEM ALARM_PAGE = 6;
-
 const short PROGMEM ALERT = 10;
 
 //UI constants
@@ -274,7 +271,7 @@ short Y_OFFSET = 0;
 short lineCount = 0;
 short currentLine = 0;
 
-//batt monitoring
+//batt monitoring - soon to be redundant just the charging flag required for the tp4056 led output
 float batteryVoltage = 0;
 short batteryPercentage = 0;
 bool isCharging = false;
@@ -383,10 +380,9 @@ void setup(void) {
   pinMode(BT_POWER,OUTPUT);
   pinMode(VIBRATE_PIN,OUTPUT);
 
-  //turn on BT
+  //turn on BT device
   digitalWrite(BT_POWER, HIGH);
 
-  //// u8g_prepare();
 
   for(short i = 0; i < numberOfSettings; i++){
     settingValue[i] = readFromEEPROM(i);
@@ -409,19 +405,13 @@ void setup(void) {
 
   messagePtr = &message[0]; // could have used messagePtr = message
 
-  //setup batt read pin
-//  analogReference(DEFAULT);
-//  analogReadResolution(10);// 2^10 = 1024
-//  analogReadAveraging(32);//smoothing
-
-  //HWSERIAL.print("AT"); to cut the connection so we have to reconnect if the watch crashes
-
+  //cut the connection so we have to reconnect if the watch crashes and resets
   HWSERIAL.print("AT");
 
   Serial.println(F("MabezWatch OS Loaded!"));
 
   // test notification
-  getNotification("<n>com.mabezdev<t>Hello<e>Test you cunty<i>askhjdgahkjshdgasd<e>",64);
+  getNotification("<n>com.mabezdev<t>Hello<e>Test Message<i>askhjdgahkjshdgasd<e>",64);
 }
 
 void u8g_prepare(void) {
@@ -617,12 +607,12 @@ void updateSystem(){
     }
 
     // send data back to the app about the system
-//    HWSERIAL.print("<b>");
-//    HWSERIAL.print(batteryPercentage);
-//    HWSERIAL.print(",");
-//    HWSERIAL.print(batteryVoltage);
-//    HWSERIAL.print(",");
-//    HWSERIAL.print(isCharging);
+    HWSERIAL.print("<b>");
+    HWSERIAL.print(batteryPercentage);
+    HWSERIAL.print(",");
+    HWSERIAL.print(batteryVoltage);
+    HWSERIAL.print(",");
+    HWSERIAL.print(isCharging);
   }
 
   if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
@@ -650,7 +640,7 @@ void loop(void) {
     {
       // all draw methods must be called between clearDisplay() and display()
       if(loading > 0){
-        display.drawBitmap(55,12,LOGO,21,24,1);
+        display.drawBitmap(55,12,LOGO,21,24,1); // logo is draw weirdly atm, need to fix
         drawStr(42,55,"Loading...");
       } else {
         switch(pageIndex){
@@ -755,7 +745,7 @@ void loop(void) {
           //reset the messagePtr once done
           messagePtr = message;
         } else {
-          if(!((finalDataIndex+messageIndex) >= 249)){ //check the data will fit short he char array
+          if(!((finalDataIndex+messageIndex) >= MAX_PAYLOAD_LENGTH)){ //check the data will fit short he char array
             for(short i=0; i < messageIndex; i++){
               finalData[finalDataIndex] = message[i];
               finalDataIndex++;

@@ -63,6 +63,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
     -(30/11/2016) Moving to STM32 platform, starting conversion after weeks of trying to get the oled to play with it. Finally acheived that tonight but we need to switch to new GFX lib, should be a reasonalbel easy swap (hopefully)
     -(01/12/2016) All software functionality back to previous state, need to hook up bluetooth and figure out a good way to do our own alarms and figure out capactive touch buttons?
     -(02/12/2016) Fixed all functionality witht he RTC, checked and the main loop still receives messages perfectly, waiting for hm-11 to do a full test with the app
+    -(10/12/2016) Added software alarm system, and fixed various bugs witht he previous system
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate
@@ -128,11 +129,11 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
       - add hardware power on/off
 
       - STM32 ToDo Specfifics
-      - http://stm32duino.com/viewtopic.php?t=610 - implement some power saving techniques like the ones here
-      - fix bug with alarms times being read in and the day of week changing
-      - add alarm symbol on homepage to show its set
-      - currently alarms can be set in the past, once we have a back up battery, implement checks to stop this
-      - second alarm not saving or loaded to eeprom correctly, investigate
+        - http://stm32duino.com/viewtopic.php?t=610 - implement some power saving techniques like the ones here
+        - add alarm symbol on homepage to show its set
+        - currently alarms can be set in the past, once we have a back up battery, implement checks to stop this
+        - second alarm not saving or loaded to eeprom correctly, investigate[DONE]
+        - Add a toggle to have a same alarm everyday
 
 
  */
@@ -333,14 +334,12 @@ typedef struct Alm {
 } Alm;
 Alm alarms[2];
 TimeElements alarmTm;
-//bool activeAlarms[2] = {false,false};
- //alarm time: hours, mins, dateDay
-//short alarmTime[3] = {0,0,0}; //alarm time: hours, mins, dateDay
 const short PROGMEM alarmMaxValues[3] = {23,59,6};
 short alarmToggle = 0; // alarm1 = 0, alarm2 = 1
 short prevAlarmToggle = 1;
 short alarmIndex = 0;
 const short ALARM_ADDRESS = 20;//start at 30, each alarm has 4 stored values, active,hours,mins,dateDay
+const short ALARM_DATA_LENGTH = 5; // five bytes required per alarm, currently only two alarms
 
 //used for power saving
 bool idle = false;
@@ -367,6 +366,9 @@ const byte PROGMEM CHARGED[] = {
 
 void setup(void) {
   Serial.begin(9600);
+  
+  while(!Serial.isConnected());
+  
   HWSERIAL.begin(9600);
 
   display.begin();
@@ -394,10 +396,12 @@ void setup(void) {
 //  for(short j=0; j < 128; j++){
 //    saveToEEPROM(j,0);
 //  }
-
+  
   alarms[0].active = readFromEEPROM(ALARM_ADDRESS);
-  alarms[1].active = readFromEEPROM(ALARM_ADDRESS + 5);
-
+  alarms[1].active = readFromEEPROM(ALARM_ADDRESS + ALARM_DATA_LENGTH);
+  alarms[0].time = EEPROMReadlong(ALARM_ADDRESS + 1); // plus one to get actual time not the toggle
+  alarms[1].time = EEPROMReadlong(ALARM_ADDRESS + ALARM_DATA_LENGTH + 1);
+  
   alarms[0].name = "Alarm One";
   alarms[1].name = "Alarm Two";
 
@@ -532,7 +536,7 @@ void updateSystem(){
       }
     }
 
-    /* Serial.println(F("=============================================="));
+    Serial.println(F("=============================================="));
     if(isConnected){
       connectedTime++;
       Serial.print(F("Connected for "));
@@ -578,30 +582,11 @@ void updateSystem(){
     Serial.print(F("/"));
     Serial.print(dateArray[1]);
     Serial.print(F("/"));
-    Serial.println(dateArray[2]);
+    Serial.println(dateArray[2]+1970);
 
     Serial.print(F("Free RAM:"));
     Serial.println(FreeRam());
     Serial.println(F("=============================================="));
-    */
-
-    //Alarm checks
-//    if(activeAlarms[0]){
-//      if(RTC.alarm(ALARM_1)){
-//        createAlert("ALARM1",6,10);
-//        Serial.println("ALARM 1 HAD GONE OFF");
-//        activeAlarms[0] = false;
-//        saveToEEPROM(ALARM_ADDRESS,activeAlarms[0]);
-//      }
-//    }
-//    if(activeAlarms[1]){
-//      if(RTC.alarm(ALARM_2)){
-//        createAlert("ALARM2",6,10);
-//        Serial.println("ALARM 2 HAD GONE OFF");
-//        activeAlarms[1] = false;
-//        saveToEEPROM(ALARM_ADDRESS + 5,activeAlarms[1]);
-//      }
-//    }
 
     // check alarms here
     for(int i=0; i < 2; i++){
@@ -625,13 +610,13 @@ void updateSystem(){
             Serial.println("Creating alert!");
           } 
           alarms[i].active = false;
-          short address = i == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + 5;
+          short address = i == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + ALARM_DATA_LENGTH;
           saveToEEPROM(address,alarms[i].active);
         }
       }
     }
 
-
+    // send data back to the app about the system
 //    HWSERIAL.print("<b>");
 //    HWSERIAL.print(batteryPercentage);
 //    HWSERIAL.print(",");
@@ -662,27 +647,25 @@ void updateSystem(){
 void loop(void) {
     //start picture loop
     display.clearDisplay();
-
-    // modify the display in here
-    
-    if(loading > 0){
-      display.drawBitmap(55,12,LOGO,21,24,1);
-      drawStr(42,55,"Loading...");
-    } else {
-      switch(pageIndex){
-        case 0: homePage(clockArray[0],clockArray[1],clockArray[2]); break;
-        case 1: notificationMenuPage(); break;
-        case 2: notificationFullPage(menuSelector); break;
-        case 4: timerPage(); break;
-        case 5: settingsPage(); break;
-        case 6: alarmPage(); break;
-        case 10: alertPage(); break;
+    {
+      // all draw methods must be called between clearDisplay() and display()
+      if(loading > 0){
+        display.drawBitmap(55,12,LOGO,21,24,1);
+        drawStr(42,55,"Loading...");
+      } else {
+        switch(pageIndex){
+          case 0: homePage(clockArray[0],clockArray[1],clockArray[2]); break;
+          case 1: notificationMenuPage(); break;
+          case 2: notificationFullPage(menuSelector); break;
+          case 4: timerPage(); break;
+          case 5: settingsPage(); break;
+          case 6: alarmPage(); break;
+          case 10: alertPage(); break;
+        }
       }
     }
-
-    // end picture loop by displaying the data we changed
-    display.display();
-    
+    display.display();  // end picture loop by displaying the data we changed
+   
     handleInput();
     while(HWSERIAL.available()){
       message[messageIndex] = char(HWSERIAL.read());//store char from serial command
@@ -848,13 +831,16 @@ void alarmPage(){
     }
     short address = 0;
     if(alarmToggle == 0 && alarms[alarmToggle].active){
-      address = ALARM_ADDRESS + 1;
+      address = ALARM_ADDRESS + 1; // + 1 for first value
     } else if(alarmToggle == 1 && alarms[alarmToggle].active) {
-      address = ALARM_ADDRESS + 5;
+      address = ALARM_ADDRESS + ALARM_DATA_LENGTH + 1; // +1 for first value of the second alarm
     }
+    Serial.print("Reading from address: ");
+    Serial.println(address);
     alarms[alarmToggle].time = EEPROMReadlong(address);
-    Serial.println("Time from EEPROM: ");
-    Serial.print(alarms[alarmToggle].time);
+    Serial.print(alarms[alarmToggle].name);
+    Serial.print(" time from EEPROM: ");
+    Serial.println(alarms[alarmToggle].time);
     breakTime(alarms[alarmToggle].time,alarmTm);
     alarms[alarmToggle].alarmTime[0] = alarmTm.Hour;
     alarms[alarmToggle].alarmTime[1] = alarmTm.Minute;
@@ -866,12 +852,13 @@ void alarmPage(){
       alarms[alarmToggle].alarmTime[2] = (date + dayInMonth[monthSet - 1]) - dateArray[0];
     }
 
-    Serial.println("Read alarm set for: ");
-    Serial.println("Time: ");
+    Serial.print(alarms[alarmToggle].name);
+    Serial.println("time: ");
     Serial.print(alarms[alarmToggle].alarmTime[0]);
     Serial.print(":");
     Serial.print(alarms[alarmToggle].alarmTime[1]);
     Serial.println(":0");
+    
     Serial.println("Date: ");
     Serial.print(date);
     Serial.print("/");
@@ -1048,9 +1035,9 @@ void homePage(short hour, short minute,short second){
    drawStr(53,32,"3");
 
   if(clockArray[0] > 12){
-     drawStr(10,64,"PM");
+     drawStr(0,56,"PM");
   } else {
-     drawStr(10,64,"AM");
+     drawStr(0,56,"AM");
   }
 
 
@@ -1082,8 +1069,8 @@ void homePage(short hour, short minute,short second){
     case 3:  drawStr(70,36 + 3,"Messages"); break;
     case 4:  drawStr(80,36 + 3,"Timer"); break;
     case 5:  drawStr(70,36 + 3,"Settings"); break;
-    case 6:  drawStr(73,36 + 3,"Reset"); display.drawBitmap(110,36,BLUETOOTH_CONNECTED,8,10,WHITE); break;
-    case 7:  drawStr(75,36 + 3,"Alarms"); break;
+    case 7:  drawStr(73,36 + 3,"Reset"); display.drawBitmap(110,36,BLUETOOTH_CONNECTED,8,10,WHITE); break;
+    case 6:  drawStr(75,36 + 3,"Alarms"); break;
   }
 
   //status bar - 15 px high for future icon ref
@@ -1370,9 +1357,9 @@ void handleOkInput(){
     } else if(widgetSelector == 5){
       pageIndex = SETTINGS;
     } else if(widgetSelector == 6){
-        resetBTModule();
-    } else if(widgetSelector == 7){
       pageIndex = ALARM_PAGE;
+    } else if(widgetSelector == 7){
+      resetBTModule();
     }
     Y_OFFSET = 0;
   } else if(pageIndex == NOTIFICATION_MENU){
@@ -1427,12 +1414,12 @@ void handleOkInput(){
       if(alarms[alarmToggle].active){
         if((dateArray[0] + alarms[alarmToggle].alarmTime[2]) > dayInMonth[dateArray[1] - 1]){
           setAlarm(alarmToggle, alarms[alarmToggle].alarmTime[0], alarms[alarmToggle].alarmTime[1], ((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]),dateArray[1],dateArray[2]); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
-          Serial.print("Alarm set for the : ");
-          Serial.println(((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
+          //Serial.print("Alarm set for the : ");
+          //Serial.println(((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
         } else {
           setAlarm(alarmToggle, alarms[alarmToggle].alarmTime[0], alarms[alarmToggle].alarmTime[1], (dateArray[0] + alarms[alarmToggle].alarmTime[2]),dateArray[1],dateArray[2]);
-          Serial.print("Alarm set for the : ");
-          Serial.println((dateArray[0] + alarms[alarmToggle].alarmTime[2]));
+          //Serial.print("Alarm set for the : ");
+          //Serial.println((dateArray[0] + alarms[alarmToggle].alarmTime[2]));
         }
 
       }
@@ -1636,7 +1623,7 @@ void getTimeFromDevice(char message[], short len){
 */
 
 void setAlarm(short alarmType, short hours, short minutes, short date,short month,short year){
-  short start = alarmType == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + 5;
+  short start = alarmType == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + ALARM_DATA_LENGTH;
 //  if(alarmType == 0){
 //    RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
 //    Serial.println("ALARM1 Set!");
@@ -1674,10 +1661,12 @@ void setAlarm(short alarmType, short hours, short minutes, short date,short mont
   alarmTm.Year = year; // - 1970
   time = makeTime(alarmTm);
   alarms[alarmType].time = time;
+  
   Serial.print("Alarm makeTime: ");
   Serial.println(alarms[alarmType].time);
   Serial.print("Starting write at address: ");
   Serial.println(start);
+  
   saveToEEPROM(start,true); //set alarm active
   start++;
   EEPROMWritelong(start,time);// need to write long

@@ -7,7 +7,7 @@
 // #include<MAX17043.h> // will be using this as our lipo monitor
 #include<Adafruit_SH1106.h>
 
-#define HWSERIAL Serial2 //change back to Serial2 when we use bluetooth // PA2 & PA3
+#define HWSERIAL Serial //change back to Serial2 when we use bluetooth // PA2 & PA3
 
 // Leap year calulator expects year argument as years offset from 1970
 #define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
@@ -40,7 +40,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
  *
  * Update:
  *  -(04/04/16)UI Improved vastly.
- *  -(19/04/16)Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or finalData (See todo for removal of all dynamic allocations)
+ *  -(19/04/16)Fixed notification sizes mean we can't SRAM overflow, leaves about 1k of SRAM for dynamic allocations i.e message or data (See todo for removal of all dynamic allocations)
  *  -(25/04/16)Fixed RTC not setting/receiving the year
  *  -(26/04/16)Added a menu/widget service for the main page
  *  -(27/04/16)Fixed RTC showing AM instead of PM and visa versa
@@ -136,6 +136,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
         - second alarm not saving or loaded to eeprom correctly, investigate[DONE]
         - Add a toggle to have a same alarm everyday
         - correct the display of the loading logo
+        - add support for holding down a button to keep increasing it
 
 
  */
@@ -169,16 +170,14 @@ short lastVector = 0;
 long prevButtonPressed = 0;
 
 //serial retrieval vars
-char message[100]; // serial read buffer
-char *messagePtr; //this could be local to the receiving loop
-char finalData[250];//data set buffer
-const short MAX_PAYLOAD_LENGTH = 250 - 1; // must equal the length of finalData - 1, which inturn is the sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
-short finalDataIndex = 0; //index is required as we dunno when we stop
-short messageIndex = 0;
-bool readyToProcess = false;
-bool receiving = false;
-bool checkingTag = false;
-char messageBuffer[3];
+const short MAX_DATA_LENGTH = 500; // sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
+char payload[100]; // serial read buffer
+char data[MAX_DATA_LENGTH];//data set buffer
+short dataIndex = 0; //index is required as we dunno when we stop
+bool transmissionSuccess = false;
+bool receiving = false; // are we currently recieving data?
+bool checkingTag = false; // error checking if we recieve an incomplete tag, i.e <f> is split into '<f' and then '>' comes after
+char messageBuffer[3]; // where '<f' will get combined with '>' and checked to see if its a valid tag
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
@@ -197,8 +196,7 @@ typedef struct TimeElements
   uint8_t Year;   // Offset from 1970; 
 } TimeElements ; 
 
-uint32_t dateTime_t;
-TimeElements  tm;
+TimeElements  tm; // real time clock time structure
 
 //weather vars
 bool weatherData = false;
@@ -212,8 +210,8 @@ const short PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
 bool gotUpdatedTime = false;
-short clockArray[3] = {0,47,32};
-short dateArray[4] = {0,0,0,0};
+short clockArray[3] = {0,47,32}; // HH:MM:SS
+short dateArray[4] = {0,0,0,0}; // DD/MM/YYYY, last is Day of Week
 
 long prevMillis = 0;
 
@@ -230,12 +228,12 @@ typedef struct{
 short notificationIndex = 0;
 const short notificationMax = 30; // can increase this or increase the text size as we have 20kb RAM on the STM32
 Notification notifications[notificationMax]; 
-bool wantNotifications = true;
-bool shouldRemove = false;
+bool wantNotifications = true; // used to tell the app that we have no more room for notifications and it should hold them in a queue
+bool shouldRemove = false; //  used to remove notifications once read
 
 //pin constants - most of these will need to be adjusted for the STM32F1
-const short PROGMEM OK_BUTTON = PB4;
-const short PROGMEM DOWN_BUTTON = PB3;
+const short PROGMEM OK_BUTTON = PB3;
+const short PROGMEM DOWN_BUTTON = PB4;
 const short PROGMEM UP_BUTTON = PB5;
 const short PROGMEM BATT_READ = 0;
 const short PROGMEM VIBRATE_PIN = 10;
@@ -271,7 +269,7 @@ short Y_OFFSET = 0;
 short lineCount = 0;
 short currentLine = 0;
 
-//batt monitoring - soon to be redundant just the charging flag required for the tp4056 led output
+//batt monitoring - soon to be redundant just the charging flag required for the tp4056 led output as were using a MAX17043 dedicateed fuel gauge
 float batteryVoltage = 0;
 short batteryPercentage = 0;
 bool isCharging = false;
@@ -329,14 +327,15 @@ typedef struct Alm {
   bool active = false;
   String name;
 } Alm;
+
 Alm alarms[2];
-TimeElements alarmTm;
-const short PROGMEM alarmMaxValues[3] = {23,59,6};
+TimeElements alarmTm; // used for calculating alarm time
+const short PROGMEM alarmMaxValues[3] = {23,59,6}; // 23 hours in advance, 59 minutes in advance before it increases the hours, 6 days in advance
 short alarmToggle = 0; // alarm1 = 0, alarm2 = 1
 short prevAlarmToggle = 1;
 short alarmIndex = 0;
-const short ALARM_ADDRESS = 20;//start at 30, each alarm has 4 stored values, active,hours,mins,dateDay
-const short ALARM_DATA_LENGTH = 5; // five bytes required per alarm, currently only two alarms
+const short ALARM_ADDRESS = 20;//start at 20, 
+const short ALARM_DATA_LENGTH = 5; // five bytes required per alarm, 1 byte for active and 4 bytes that store a long of the alarm time in seconds
 
 //used for power saving
 bool idle = false;
@@ -403,20 +402,18 @@ void setup(void) {
 
   alarmTm.Second = 0;
 
-  messagePtr = &message[0]; // could have used messagePtr = message
-
   //cut the connection so we have to reconnect if the watch crashes and resets
   HWSERIAL.print("AT");
 
   Serial.println(F("MabezWatch OS Loaded!"));
 
-  // test notification
-  getNotification("<n>com.mabezdev<t>Hello<e>Test Message<i>askhjdgahkjshdgasd<e>",64);
-}
-
-void u8g_prepare(void) {
-  // u8g_InitComFn(&u8g, &// u8g_dev_sh1106_128x64_2x_i2c, // u8g_com_hw_i2c_fn);
-  // u8g_SetFont(&u8g, // u8g_font_6x12);
+  // test notification through serial - line by line is how our app sends the payloads
+  //<n>com.mabezdev<t>Hello<e>Test Message     - Meta data with the rest of the space used by text, <e> signifying the end of meta data
+  //<i> this 2nd payloads data                 - 100 byte payloads of data
+  //<i> we can always add more payloads
+  //<i> with the data interval tag
+  //<f>                                        - finsih with the <f> tag
+  getNotification("<n>com.mabezdev<t>Hello<e>Test Message this 2nd payloads data<e>",64);
 }
 
 void drawStr(int x, int y, char const* text){
@@ -607,12 +604,12 @@ void updateSystem(){
     }
 
     // send data back to the app about the system
-    HWSERIAL.print("<b>");
-    HWSERIAL.print(batteryPercentage);
-    HWSERIAL.print(",");
-    HWSERIAL.print(batteryVoltage);
-    HWSERIAL.print(",");
-    HWSERIAL.print(isCharging);
+//    HWSERIAL.print("<b>");
+//    HWSERIAL.print(batteryPercentage);
+//    HWSERIAL.print(",");
+//    HWSERIAL.print(batteryVoltage);
+//    HWSERIAL.print(",");
+//    HWSERIAL.print(isCharging);
   }
 
   if(((currentInterval - prevAlertMillis) >= 250) && alertVibrationCount > 0){ //quarter a second
@@ -657,33 +654,34 @@ void loop(void) {
     display.display();  // end picture loop by displaying the data we changed
    
     handleInput();
+
+    short payloadIndex = 0;
     while(HWSERIAL.available()){
-      message[messageIndex] = char(HWSERIAL.read());//store char from serial command
-      messageIndex++;
-      if(messageIndex >= 99){
+      payload[payloadIndex] = char(HWSERIAL.read());//store char from serial command
+      payloadIndex++;
+      if(payloadIndex >= 99){
         //this message is too big something went wrong flush the message out the system and break the loop
         Serial.println(F("Error message overflow, flushing buffer and discarding message."));
-        messageIndex = 0;
-        memset(message, 0, sizeof(message)); //resetting array
+        memset(payload, 0, sizeof(payload)); //resetting array
         HWSERIAL.flush();
         break;
       }
       delay(1);
   }
   if(!HWSERIAL.available()){
-    if(messageIndex > 0){
+    if(payloadIndex > 0){
       Serial.print(F("Message: "));
-      for(short i=0; i < messageIndex; i++){
-        Serial.print(message[i]);
+      for(short i=0; i < payloadIndex; i++){
+        Serial.print(payload[i]);
       }
       Serial.println();
 
-
-      if(startsWith(message,"OK",2)){
-          if(startsWith(message,"OK+C",4)){
+      // Handle connection packet from HM-11
+      if(startsWith(payload,"OK",2)){
+          if(startsWith(payload,"OK+C",4)){
             isConnected = true;
             Serial.println(F("Connected!"));
-          } else if(startsWith(message,"OK+L",4)){
+          } else if(startsWith(payload,"OK+L",4)){
             isConnected = false;
             Serial.println(F("Disconnected!"));
             //reset vars like got updated time and weather here also
@@ -692,38 +690,35 @@ void loop(void) {
             Serial.println(F("Error connecting, retry."));
             HWSERIAL.print("AT");
           }
-          messageIndex = 0;
-          memset(message, 0, sizeof(message));
-        }
-      if(!receiving && startsWith(message,"<",1)){
+          memset(payload, 0, sizeof(payload));
+      }
+      
+      if(!receiving && startsWith(payload,"<",1)){
         receiving = true;
-        Serial.println("Receiving!");
-      }else if(receiving && (message=="<n>" || message=="<d>" || message=="<w>")) {
+        //Serial.println("Receiving!");
+      }else if(receiving && (payload=="<n>" || payload=="<d>" || payload=="<w>")) { // TODO: change these to startswith
         Serial.println(F("Message data missing, ignoring."));
         //we never recieved the end tag of a previous message
-        //reset vars
-        messageIndex = 0;
-        memset(message, 0, sizeof(message));
         resetTransmissionVariables();
-      }else if((messageIndex < 2) && receiving){//doesn't contain a full tag and we are receiving
+      }else if((payloadIndex < 2) && receiving){//doesn't contain a full tag and we are receiving
         //store this message and combine the next one and check if it equals <f>
         if(!checkingTag){
-          for(short j = 0; j < messageIndex; j++){
-            messageBuffer[j] = message[j];
+          for(short j = 0; j < payloadIndex; j++){
+            messageBuffer[j] = payload[j];
           }
           checkingTag = true;
         } else {
           short currentAmount = sizeof(messageBuffer);
-          if((currentAmount + (messageIndex + 1)) == 3){ //make sure it's a tag and it doesnt exceed the array index
+          if((currentAmount + (payloadIndex + 1)) == 3){ //make sure it's a tag and it doesnt exceed the array index
             //we have found a tag
-            for(short k = (currentAmount - 1); k < (3 - (messageIndex + 1)); k++){
-                messageBuffer[k] = message[k];
+            for(short k = (currentAmount - 1); k < (3 - (payloadIndex + 1)); k++){
+                messageBuffer[k] = payload[k];
             }
             //if its an <f> then we finish else we carry on
             if(startsWith(messageBuffer,"<f>",3)){
               Serial.println("We Found a finish tag that got corrupted!");
               // make ready to process true cuz were done
-              readyToProcess = true;
+              transmissionSuccess = true;
             }
             //reset checkingTag flag
             checkingTag = false;
@@ -732,47 +727,47 @@ void loop(void) {
           }
         }
       }
-      if(!startsWith(message,"<f>",3)){
-        Serial.println("Found the end of a message");
-        if(startsWith(message,"<i>",3)){
-          // move pointer on to remove out first 3 chars
-          messagePtr += 3;
-          while(*messagePtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
-            finalData[finalDataIndex] = *messagePtr; // *messagePtr derefereces the pointer so it points to the data
-            messagePtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
-            finalDataIndex++;
-          }
+
+      // gather data from payloads of 100 bytes and combine them into final data
+      if(!startsWith(payload,"<f>",3)){
+        if(startsWith(payload,"<i>",3)){
           //reset the messagePtr once done
-          messagePtr = message;
+          char *pldPtr = payload;
+          // move pointer on to remove out first 3 chars
+          pldPtr += 3;
+          while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
+            data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
+            pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
+            dataIndex++;
+          }
         } else {
-          if(!((finalDataIndex+messageIndex) >= MAX_PAYLOAD_LENGTH)){ //check the data will fit short he char array
-            for(short i=0; i < messageIndex; i++){
-              finalData[finalDataIndex] = message[i];
-              finalDataIndex++;
+          if(!((dataIndex+payloadIndex) >= MAX_DATA_LENGTH - 1)){ //check the data will fit short he char array
+            for(short i=0; i < payloadIndex; i++){
+              data[dataIndex] = payload[i];
+              dataIndex++;
             }
           } else {
-            Serial.println(F("FinalData is full, but there was more data to add. Discarding data."));
-            messageIndex = 0;
-            memset(message, 0, sizeof(message));
+            Serial.println(F("data is full, but there was more data to add. Discarding data."));
             resetTransmissionVariables();
           }
         }
       } else {
+        Serial.println("Found the end of a message, ready for processing.");
         receiving = false;
-        readyToProcess = true;
+        transmissionSuccess = true;
       }
       //reset index
-      messageIndex = 0;
-      memset(message, 0, sizeof(message)); // clears array
+      memset(payload, 0, sizeof(payload)); // clears array for new payload
     }
   }
 
-  if(readyToProcess){
+  // if we have data ready send it to the correct 'widget'
+  if(transmissionSuccess){
     Serial.print(F("Received: "));
-    Serial.println(finalData);
-    if(startsWith(finalData,"<n>",3)){
+    Serial.println(data);
+    if(startsWith(data,"<n>",3)){
       if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
-        getNotification(finalData,finalDataIndex);
+        getNotification(data,dataIndex);
         vibrate(2); //vibrate
         if(notificationIndex > (notificationMax - 2)){ //tell the app we are out of space and hold the notifications
           HWSERIAL.print("<e>");
@@ -781,10 +776,10 @@ void loop(void) {
       } else {
         Serial.println(F("Max notifications Hit."));
       }
-    } else if(startsWith(finalData,"<w>",3)){
-      getWeatherData(finalData,finalDataIndex);
-    } else if(startsWith(finalData,"<d>",3)){
-      getTimeFromDevice(finalData,finalDataIndex);
+    } else if(startsWith(data,"<w>",3)){
+      getWeatherData(data,dataIndex);
+    } else if(startsWith(data,"<d>",3)){
+      getTimeFromDevice(data,dataIndex);
     }
     resetTransmissionVariables();
   }
@@ -825,31 +820,34 @@ void alarmPage(){
     } else if(alarmToggle == 1 && alarms[alarmToggle].active) {
       address = ALARM_ADDRESS + ALARM_DATA_LENGTH + 1; // +1 for first value of the second alarm
     }
-    Serial.print("Reading from address: ");
-    Serial.println(address);
+    
     alarms[alarmToggle].time = EEPROMReadlong(address);
+    
     Serial.print(alarms[alarmToggle].name);
-    Serial.print(" time from EEPROM: ");
+    Serial.print(F(" time from EEPROM: "));
     Serial.println(alarms[alarmToggle].time);
-    breakTime(alarms[alarmToggle].time,alarmTm);
+    
+    breakTime(alarms[alarmToggle].time,alarmTm); // brak the time in seconds down to something the user will understand HH:MM:SS DD/MM/YYYY
+    
     alarms[alarmToggle].alarmTime[0] = alarmTm.Hour;
     alarms[alarmToggle].alarmTime[1] = alarmTm.Minute;
     short date = alarmTm.Day;
     short monthSet = alarmTm.Month;
+    
     if(date == dateArray[0]){
       alarms[alarmToggle].alarmTime[2] = 0;
     } else {
       alarms[alarmToggle].alarmTime[2] = (date + dayInMonth[monthSet - 1]) - dateArray[0];
     }
 
-    Serial.print(alarms[alarmToggle].name);
-    Serial.println("time: ");
+    Serial.println(alarms[alarmToggle].name);
+    Serial.print("Time: ");
     Serial.print(alarms[alarmToggle].alarmTime[0]);
     Serial.print(":");
     Serial.print(alarms[alarmToggle].alarmTime[1]);
     Serial.println(":0");
     
-    Serial.println("Date: ");
+    Serial.print("Date: ");
     Serial.print(date);
     Serial.print("/");
     Serial.print(monthSet);
@@ -858,7 +856,7 @@ void alarmPage(){
     Serial.println();
    
       
-      
+    // toggle between 1 and 0
     prevAlarmToggle = alarmToggle;
   }
 
@@ -990,7 +988,7 @@ void notificationFullPage(short chosenNotification){
     textLength++;
     ptr++;
   }*/
-
+  
   if(textLength > charsThatFit){
     for(short i=0; i < textLength; i++){
       if((charIndex >= charsThatFit) || i == (textLength - 1)){ // i == textLength so we catch what we ahve of a line if we dont have a complete line
@@ -1015,9 +1013,7 @@ void notificationFullPage(short chosenNotification){
 }
 
 void homePage(short hour, short minute,short second){
-  // u8g_DrawCircle(&u8g,32,32,30,// u8g_DRAW_ALL);
   display.drawCircle(32,32,30,WHITE);
-  // u8g_DrawCircle(&u8g,32,32,29,// u8g_DRAW_ALL);
   display.drawCircle(32,32,29,WHITE);
    drawStr(59-32,8,"12");
    drawStr(59-32 + 3,52,"6");
@@ -1172,7 +1168,8 @@ void weatherWidget(){
 
 void handleInput(){
   short  vector = getConfirmedInputVector();
-    if(vector!=lastVector){
+   if(vector!=lastVector){
+    // TODO: once we've clicked a new button if we keep holding it we should keep handling that event, i.e keep increasing a number if we hold the button - implement this
       if (vector == UP_DOWN){
         Serial.println(F("Dual click detected!"));
         handleDualClick();
@@ -1205,6 +1202,7 @@ void handleInput(){
 }
 
 void handleDualClick(){
+    // currently just return to home
     pageIndex = HOME_PAGE;
 }
 
@@ -1816,9 +1814,9 @@ void resetBTModule(){
 }
 
 void resetTransmissionVariables(){
-  finalDataIndex = 0; //reset final data
-  memset(finalData, 0, sizeof(finalData)); // clears array - (When add this code to the OS we need to add the memsets to the resetTransmission() func)
-  readyToProcess = false;
+  dataIndex = 0; //reset final data
+  memset(data, 0, sizeof(data)); // clears array - (When add this code to the OS we need to add the memsets to the resetTransmission() func)
+  transmissionSuccess = false;
 }
 
 void removeNotification(short pos){

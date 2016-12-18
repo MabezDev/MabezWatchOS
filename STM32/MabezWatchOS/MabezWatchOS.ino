@@ -7,7 +7,7 @@
 // #include<MAX17043.h> // will be using this as our lipo monitor
 #include<Adafruit_SH1106.h>
 
-#define HWSERIAL Serial //change back to Serial2 when we use bluetooth // PA2 & PA3
+#define HWSERIAL Serial2 //change back to Serial2 when we use bluetooth // PA2 & PA3
 
 // Leap year calulator expects year argument as years offset from 1970
 #define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
@@ -171,7 +171,7 @@ long prevButtonPressed = 0;
 
 //serial retrieval vars
 const short MAX_DATA_LENGTH = 500; // sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
-char payload[100]; // serial read buffer
+char payload[100]; // serial read buffer for data segments(payloads)
 char data[MAX_DATA_LENGTH];//data set buffer
 short dataIndex = 0; //index is required as we dunno when we stop
 bool transmissionSuccess = false;
@@ -307,11 +307,6 @@ long prevAlertMillis = 0;
 // only supports the timestamp for one alert currently
 short alertRecieved[2] = {0,0};
 
-//icons
-const byte PROGMEM BLUETOOTH_CONNECTED[] = {
-   0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
-};
-
 short loading = 3; // time the loading screen is show for
 
 //drawing buffers used for character rendering
@@ -340,6 +335,13 @@ const short ALARM_DATA_LENGTH = 5; // five bytes required per alarm, 1 byte for 
 //used for power saving
 bool idle = false;
 
+
+//icons
+const byte PROGMEM BLUETOOTH_CONNECTED[] = {
+   0x31, 0x52, 0x94, 0x58, 0x38, 0x38, 0x58, 0x94, 0x52, 0x31
+};
+
+
 //Logo for loading
 const byte PROGMEM LOGO[] = {
   0x00, 0x00, 0x00, 0x1e, 0x00, 0x0f, 0x3e, 0x80, 0x0f, 0x3e, 0x80, 0x0f,
@@ -363,7 +365,7 @@ const byte PROGMEM CHARGED[] = {
 void setup(void) {
   Serial.begin(9600);
   
-  while(!Serial.isConnected());
+  //while(!Serial.isConnected());
   
   HWSERIAL.begin(9600);
 
@@ -728,30 +730,32 @@ void loop(void) {
         }
       }
 
-      // gather data from payloads of 100 bytes and combine them into final data
       if(!startsWith(payload,"<f>",3)){
+        // get a reference to our payload
+        char *pldPtr = payload;
+        // if we find a data interval remove it from the final message
         if(startsWith(payload,"<i>",3)){
-          //reset the messagePtr once done
-          char *pldPtr = payload;
           // move pointer on to remove out first 3 chars
           pldPtr += 3;
-          while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
+        } else {
+          //TODO: check if the new data will fit int he final data array
+          // add the payload to the final data
+           while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
             data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
             pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
             dataIndex++;
           }
-        } else {
-          if(!((dataIndex+payloadIndex) >= MAX_DATA_LENGTH - 1)){ //check the data will fit short he char array
-            for(short i=0; i < payloadIndex; i++){
-              data[dataIndex] = payload[i];
-              dataIndex++;
-            }
-          } else {
-            Serial.println(F("data is full, but there was more data to add. Discarding data."));
-            resetTransmissionVariables();
-          }
+//          if(!((dataIndex+payloadIndex) >= MAX_DATA_LENGTH - 1)){ //check the data will fit short he char array
+//            for(short i=0; i < payloadIndex; i++){
+//              data[dataIndex] = payload[i];
+//              dataIndex++;
+//            }
+//          } else {
+//            Serial.println(F("data is full, but there was more data to add. Discarding data."));
+//            resetTransmissionVariables();
+//          }
         }
-      } else {
+     } else {
         Serial.println("Found the end of a message, ready for processing.");
         receiving = false;
         transmissionSuccess = true;

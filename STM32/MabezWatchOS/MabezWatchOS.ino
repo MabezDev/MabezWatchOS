@@ -738,12 +738,17 @@ void loop(void) {
           // move pointer on to remove out first 3 chars
           pldPtr += 3;
         } else {
-          //TODO: check if the new data will fit int he final data array
-          // add the payload to the final data
-           while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
-            data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
-            pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
-            dataIndex++;
+          //TODO: test if this check works for edge cases
+          if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
+             // add the payload to the final data
+             while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
+              data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
+              pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
+              dataIndex++;
+             }
+          } else {
+            Serial.println("Cannot append payload to final data, data corrupted or exceeded array bounds.");
+            resetTransmissionVariables();
           }
 //          if(!((dataIndex+payloadIndex) >= MAX_DATA_LENGTH - 1)){ //check the data will fit short he char array
 //            for(short i=0; i < payloadIndex; i++){

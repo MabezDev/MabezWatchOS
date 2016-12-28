@@ -2,7 +2,12 @@
 #include <RTClock.h> 
 #include <EEPROM.h>
 #include <Time.h>
-#include<itoa.h>
+#include <itoa.h>
+
+
+//fonts
+#include<Adafruit_GFX.h>
+#include "Fonts/myfont.h"
 
 // #include<MAX17043.h> // will be using this as our lipo monitor
 #include<Adafruit_SH1106.h>
@@ -137,6 +142,8 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
         - Add a toggle to have a same alarm everyday
         - correct the display of the loading logo
         - add support for holding down a button to keep increasing it
+      - STM32 Buglist
+        - if a <i> is not correclt ydetected the whole message is messed up, need to separate tags and maybe think about a ok packet sent back to the app
 
 
  */
@@ -219,7 +226,7 @@ long prevMillis = 0;
 typedef struct{
   char packageName[15];
   char title[15];
-  char text[150];
+  char text[250];
   short dateReceived[2];
   short textLength;
 } Notification;
@@ -737,19 +744,19 @@ void loop(void) {
         if(startsWith(payload,"<i>",3)){
           // move pointer on to remove out first 3 chars
           pldPtr += 3;
+        }
+        //TODO: test if this check works for edge cases
+        if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
+           // add the payload to the final data
+           while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
+            data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
+            pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
+            dataIndex++;
+           }
         } else {
-          //TODO: test if this check works for edge cases
-          if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
-             // add the payload to the final data
-             while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
-              data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
-              pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
-              dataIndex++;
-             }
-          } else {
-            Serial.println("Cannot append payload to final data, data corrupted or exceeded array bounds.");
-            resetTransmissionVariables();
-          }
+          Serial.println("Cannot append payload to final data, data corrupted or exceeded array bounds.");
+          resetTransmissionVariables();
+        }
 //          if(!((dataIndex+payloadIndex) >= MAX_DATA_LENGTH - 1)){ //check the data will fit short he char array
 //            for(short i=0; i < payloadIndex; i++){
 //              data[dataIndex] = payload[i];
@@ -759,7 +766,6 @@ void loop(void) {
 //            Serial.println(F("data is full, but there was more data to add. Discarding data."));
 //            resetTransmissionVariables();
 //          }
-        }
      } else {
         Serial.println("Found the end of a message, ready for processing.");
         receiving = false;
@@ -1025,7 +1031,7 @@ void homePage(short hour, short minute,short second){
   display.drawCircle(32,32,30,WHITE);
   display.drawCircle(32,32,29,WHITE);
    drawStr(59-32,8,"12");
-   drawStr(59-32 + 3,52,"6");
+   drawStr(59-32 + 2,52,"6");
    drawStr(7,32,"9");
    drawStr(53,32,"3");
 
@@ -1069,35 +1075,35 @@ void homePage(short hour, short minute,short second){
   }
 
   //status bar - 15 px high for future icon ref
-  display.drawRect(75,0,53,15,WHITE);
+  display.drawRect(70,0,58,15,WHITE);
   //separator line between notifications and bt icon on the status bar
-  display.drawRect(116,0,116,15,WHITE);
+  display.drawRect(111,0,111,15,WHITE);
   //batt voltage and connection separator
-  display.drawRect(97,0,97,15,WHITE);
+  display.drawRect(92,0,92,15,WHITE);
 
   //notification indicator
-
-  drawStr(119,4 ,itoa(notificationIndex,numberBuffer,10));
+  short xChar = notificationIndex < 10 ? 118 : 113; // If we have two charaters to draw change the draw position to fit it
+  drawStr(xChar,4 ,itoa(notificationIndex,numberBuffer,10));
 
   //battery voltage
   if(!isCharging && !isCharged){
     if(batteryPercentage != 100){
-      drawStr(77,4,itoa(batteryPercentage,numberBuffer,10));
-      drawStr(89,4,"%");
+      drawStr(72,4,itoa(batteryPercentage,numberBuffer,10));
+      drawStr(84,4,"%");
     }
   } else if(isCharged){
     //fully charged symbol here
-    display.drawBitmap(79,1,CHARGED,14,12,WHITE);
+    display.drawBitmap(74,1,CHARGED,14,12,WHITE);
   } else {
     //draw symbol to show that we are charging here
-    display.drawBitmap(80,2,CHARGING,14,12,WHITE);
+    display.drawBitmap(75,2,CHARGING,14,12,WHITE);
   }
 
   //connection icon
   if(isConnected){
-    display.drawBitmap(102,2,BLUETOOTH_CONNECTED,8,10,WHITE);
+    display.drawBitmap(97,2,BLUETOOTH_CONNECTED,8,10,WHITE);
   } else {
-    drawStr(102,4,"NC");
+    drawStr(97,4,"NC");
   }
 }
 
@@ -1130,15 +1136,17 @@ void digitalClockWidget(){
 void weatherWidget(){
   if(weatherData){
     drawStr(72,19,weatherDay);
-
+    
+    display.setFont(&twop3pt7b); //TODO: 3pt font is required but need a clear font, preferable a pure ascii one
     intTo2Chars(timeWeGotWeather[0]);
-    drawStr(105,15,numberBuffer);
-    drawStr(113,15,":");
+    drawStr(95,22,numberBuffer);
+    drawStr(105,22,":");
     intTo2Chars(timeWeGotWeather[1]);
-    drawStr(116,15,numberBuffer);
-
+    drawStr(110,22,numberBuffer);
+    display.setFont(); // reverts back to default
+    
     drawStr(72,28,weatherTemperature);
-    drawStr(102,28,"C");
+    drawStr(85,28,"C");
 
     short index = 0;
     charIndex = 0;

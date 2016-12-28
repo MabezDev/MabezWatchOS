@@ -1,0 +1,4 @@
+Replace the USB_Serial.cpp at STM32F1/cores/maple/
+Replace the boards.txt at STM32F1
+
+- See why this is required here: http://www.stm32duino.com/viewtopic.php?t=1556

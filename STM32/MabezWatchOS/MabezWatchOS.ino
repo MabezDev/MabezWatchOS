@@ -224,18 +224,27 @@ long prevMillis = 0;
 
 //TODO: increase the size of notification text, maybe use a set of small, large and medium text sizes in a class like structure, not sure if I can do that with structs, if not I will use classes
 
+
 //notification data structure
-typedef struct{
+//typedef struct{
+//  char packageName[15];
+//  char title[15];
+//  short dateReceived[2];
+//  short textLength;
+//} Notification;
+
+struct Notification{
   char packageName[15];
   char title[15];
-  char text[250];
   short dateReceived[2];
   short textLength;
-} Notification;
+  char text[250];
+};
 
 //notification vars
 short notificationIndex = 0;
 const short notificationMax = 30; // can increase this or increase the text size as we have 20kb RAM on the STM32
+
 Notification notifications[notificationMax]; 
 bool wantNotifications = true; // used to tell the app that we have no more room for notifications and it should hold them in a queue
 bool shouldRemove = false; //  used to remove notifications once read
@@ -1013,11 +1022,11 @@ void notificationFullPage(short chosenNotification){
         drawStr(0,lines * 10  + Y_OFFSET, lineBuffer); //draw the line
         lines++;
         charIndex = 0;
-        memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
       } else {
         lineBuffer[charIndex] = notifications[chosenNotification].text[i];
         charIndex++;
       }
+      memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
     }
   } else {
     drawStr(0,FONT_HEIGHT,notifications[chosenNotification].text);
@@ -1027,6 +1036,7 @@ void notificationFullPage(short chosenNotification){
   intTo2Chars(lineCount);
   drawStr(64,50 ,numberBuffer);
   //drawStr(30, 50, textLength);
+  memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
 }
 
 void homePage(short hour, short minute,short second){

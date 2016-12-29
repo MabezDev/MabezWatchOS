@@ -222,6 +222,8 @@ short dateArray[4] = {0,0,0,0}; // DD/MM/YYYY, last is Day of Week
 
 long prevMillis = 0;
 
+//TODO: increase the size of notification text, maybe use a set of small, large and medium text sizes in a class like structure, not sure if I can do that with structs, if not I will use classes
+
 //notification data structure
 typedef struct{
   char packageName[15];
@@ -1854,7 +1856,7 @@ void removeNotification(short pos){
   }
 }
 
-float getBatteryVoltage(){
+float getBatteryVoltage(){ // depreciated soon, will be using MAX17043
   /*
    * WARNING: Add voltage divider to bring batt voltage below 3.3v at all times! Do this before pluggin in the Batt or will destroy the Pin in a best case scenario
    * and will destroy the teensy in a worst case.

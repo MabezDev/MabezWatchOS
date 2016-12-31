@@ -8,7 +8,7 @@ const short LARGE = 2;
 
 char SmallText[50][25];
 char NormalText[25][200];
-char LargeText[5][1000];
+char LargeText[5][750];
 //char **types[3] = {SmallText,NormalText,LargeText};
 //String test[12];
 //String *ty[1] = {test};
@@ -33,8 +33,6 @@ int notificationIndex = 0;
 void setup() {
   Serial.begin(9600);
   while(!Serial.isConnected());
-  //char text[] = "123456789012345678901234512345678901234567890";
-  //setText(text,SmallText[sIndex],sizeof(text));
 
   newNotification("Hello",5,SMALL);
   newNotification("Hello this is evidently longer than 25 characters and quite clearly needs to go in a normal notification",104,NORMAL);
@@ -42,14 +40,37 @@ void setup() {
   
   
   printNotificationTexts();
+
+  removeNotification(1);
+
+  printNotificationTexts();
   
   
 }
 
 void newNotification(char *text, short len ,short type){
   notifications[notificationIndex].title = "Test title";
-  addTextToNotification(type,&notifications[notificationIndex],text,len);
+  notifications[notificationIndex].textType = type;
+  addTextToNotification(&notifications[notificationIndex],text,len);
   notificationIndex++;
+}
+
+void removeNotification(short pos){
+  if ( pos >= notificationIndex + 1 ){
+    Serial.println(F("Can't delete notification."));
+  } else {
+    //need to zero out the array or stray chars will overlap with notifications
+    //memset(notifications[pos].title,0,sizeof(notifications[pos].title));
+    //memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
+    removeTextFromNotification(&notifications[pos]);
+    for ( short c = pos ; c < (notificationIndex - 1) ; c++ ){
+       notifications[c] = notifications[c+1];
+    }
+    Serial.print(F("Removed notification at position: "));
+    Serial.println(pos);
+    //lower the index
+    notificationIndex--;
+  }
 }
 
 void printNotificationTexts(){
@@ -63,8 +84,8 @@ void printNotificationTexts(){
 }
 
 
-void removeTextFromNotification(short type, Notification *notification){
-  switch(type){
+void removeTextFromNotification(Notification *notification){
+  switch(notification->textType){
     case 0:
         //find our notification to remove using out pointer
         for(int i=0; i < sIndex;i++){
@@ -109,14 +130,13 @@ void removeNotification(short pos, char *arr, short len){
 }
 
 // TYPE, address of the notification to change, text to set , length of text to set
-void addTextToNotification(short type, Notification *notification, char *textToSet, short len){
-  switch(type){
+void addTextToNotification(Notification *notification, char *textToSet, short len){
+  switch(notification->textType){
     case 0:
         Serial.println("SMALL");
         setText(textToSet,SmallText[sIndex],len);
         notification->textPointer = SmallText[sIndex];
         notification->textLength = len;
-        notification->textType = type;
         sIndex++;
         break;
     case 1:
@@ -124,7 +144,6 @@ void addTextToNotification(short type, Notification *notification, char *textToS
         setText(textToSet,NormalText[nIndex],len);
         notification->textPointer = NormalText[nIndex];
         notification->textLength = len;
-        notification->textType = type;
         nIndex++;
         break;
     case 2:
@@ -132,7 +151,6 @@ void addTextToNotification(short type, Notification *notification, char *textToS
         setText(textToSet,LargeText[lIndex],len);
         notification->textPointer = LargeText[lIndex];
         notification->textLength = len;
-        notification->textType = type;
         lIndex++;
         break;
   }

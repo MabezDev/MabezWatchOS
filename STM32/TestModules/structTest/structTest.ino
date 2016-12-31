@@ -32,33 +32,54 @@
 //};
 
 
+//class Notification{
+//  public:
+//      char packageName[15];
+//      char title[15];
+//      short dateReceived[2];
+//      short textLength;
+//      virtual void setText(char* c);
+//      virtual char* getText();
+//};
+//
+//class SmallNotification : public Notification{
+//  public:
+//      char text[50];
+//      virtual char* getText(){
+//        return text;
+//      }
+//      virtual void setText(char* c){
+//        char *textPtr = text;
+//        while(*c != '\0'){
+//          *(textPtr++) = *(c++);
+//        }
+//      }
+//};
+//
+//class LargeNotification : public Notification{
+//  public:
+//      char text[60];
+//      virtual char* getText(){
+//        return text;
+//      }
+//      virtual void setText(char* c){
+//        char *textPtr = text;
+//        int i = 0;
+//        while(*c != '\0' && i < sizeof(text)){
+//          *(textPtr++) = *(c++);
+//          i++;
+//        }
+//        text[i] = '\0';
+//      }
+//};
+
+
 class Notification{
   public:
       char packageName[15];
       char title[15];
       short dateReceived[2];
       short textLength;
-      virtual void setText(char* c);
-      virtual char* getText();
-};
-
-class SmallNotification : public Notification{
-  public:
-      char text[50];
-      virtual char* getText(){
-        return text;
-      }
-      virtual void setText(char* c){
-        char *textPtr = text;
-        while(*c != '\0'){
-          *(textPtr++) = *(c++);
-        }
-      }
-};
-
-class LargeNotification : public Notification{
-  public:
-      char text[60];
       virtual char* getText(){
         return text;
       }
@@ -69,8 +90,20 @@ class LargeNotification : public Notification{
           *(textPtr++) = *(c++);
           i++;
         }
-        text[i] = '\0';
+        Serial.println(i);
       }
+  private:
+    char text[1];
+};
+
+class SmallNotification : public Notification{
+  public:
+      char text[50];
+};
+
+class LargeNotification : public Notification{
+  public:
+      char text[60];
 };
 
 Notification *nArray[12];
@@ -78,7 +111,6 @@ Notification *nArray[12];
 void setup() {
   Serial.begin(9600);
   while(!Serial.isConnected());
-  
   nArray[0] = new SmallNotification();
   nArray[1] = new LargeNotification();
   nArray[0]->setText("Hello this is message that is Really Short");

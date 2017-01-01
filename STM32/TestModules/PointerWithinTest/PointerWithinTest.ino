@@ -38,15 +38,20 @@ void setup() {
   newNotification("Hellooooo333",12,SMALL);
   newNotification("Hellooooo444",12,SMALL);
   newNotification("Hello this is evidently longer than 25 characters and quite clearly needs to go in a normal notification",104,NORMAL);
+  newNotification("Whassup this is evidently longer than 25 characters and quite clearly needs to go in a normal notification",104,NORMAL);
+  newNotification("olleH this is evidently longer than 25 characters and quite clearly needs to go in a normal notification",104,NORMAL);
   newNotification("Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum.",574,LARGE);
   
-  //printNotificationTexts();
-  printSmallArray();
+  printNotificationTexts();
+  //printSmallArray();
+  Serial.println();
 
   removeNotification(1);
 
-  printSmallArray();
-  //printNotificationTexts();
+  Serial.println();
+
+  //printSmallArray();
+  printNotificationTexts();
   
   
 }
@@ -78,12 +83,10 @@ void removeTextFromNotification(Notification *notification){
   char *arrIndexPtr = (char*)(types[notification->textType]); // find the begining of the respective array, i.e SMALL,NORMAL,LARGE
   for(int i=0; i < textIndexes[notification->textType];i++){ // look through all valid elements
     if((notification->textPointer - arrIndexPtr) == 0){ // more 'safe way' of comparing pointers to avoid compiler optimisations
-      Serial.print("Found the text to be wiped at index: ");
-      Serial.println(i);
-      Serial.print("Length of array, type ");
-      Serial.print(notification->textType);
-      Serial.print(" is ");
-      Serial.println(textIndexes[notification->textType]);
+      Serial.print("Found the text to be wiped at index ");
+      Serial.print(i);
+      Serial.print(" in array of type ");
+      Serial.println(notification->textType);
       for ( short c = i ; c < (textIndexes[notification->textType] - 1) ; c++ ){
         // move each block into the index before it, basically Array[c] = Array[c+1], but done soley using memory modifying methods
          memcpy((char*)(types[notification->textType]) + (c * MSG_SIZE[notification->textType]),(char*)(types[notification->textType]) + ((c+1) *  MSG_SIZE[notification->textType]), MSG_SIZE[notification->textType]);
@@ -110,10 +113,13 @@ void removeNotification(short pos){
     //memset(notifications[pos].title,0,sizeof(notifications[pos].title));
     //memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
     removeTextFromNotification(&notifications[pos]);
-    for ( short c = pos ; c < (notificationIndex - 1) ; c++ ){
+    for ( short c = pos + 1; c < (notificationIndex - 1) ; c++ ){ // pos + 1 not entirely sure why
+//       Serial.print(notifications[c].textPointer);
+//       Serial.print(" now equals ");
+//       Serial.println(notifications[c+1].textPointer);
        notifications[c] = notifications[c+1];
     }
-    Serial.print(F("Removed notification at position: "));
+    Serial.print(F("Removed notification at index: "));
     Serial.println(pos);
     //lower the index
     notificationIndex--;
@@ -123,7 +129,7 @@ void removeNotification(short pos){
 void printNotificationTexts(){
   Serial.println("Notification Texts: ");
   for(int i=0; i < notificationIndex; i++){
-    Serial.print(i+1);
+    Serial.print(i);
     Serial.print("). ");
     Serial.println(notifications[i].textPointer);
   }
@@ -135,7 +141,7 @@ void printSmallArray(){
   Serial.print(textIndexes[0]);
   Serial.println(") :");
   for(int i=0; i < textIndexes[0]; i++){
-    Serial.print(i+1);
+    Serial.print(i);
     Serial.print("). ");
     Serial.println(SmallText[i]);
   }
@@ -178,14 +184,14 @@ void printSmallArray(){
 //  }
 //}
 
-void removeNotification(short pos, char *arr, short len){
-    //need to zero out the array or stray chars will overlap with notifications
-    arr+= pos; // move pointer to pos
-    for ( short c = pos ; c < (len - 1) ; c++ ){
-       //arr[c] = arr[c+1];
-       arr = arr++;
-    }
-}
+//void removeNotification(short pos, char *arr, short len){
+//    //need to zero out the array or stray chars will overlap with notifications
+//    arr+= pos; // move pointer to pos
+//    for ( short c = pos ; c < (len - 1) ; c++ ){
+//       //arr[c] = arr[c+1];
+//       arr = arr++;
+//    }
+//}
 
 //// TYPE, address of the notification to change, text to set , length of text to set
 //void addTextToNotification(Notification *notification, char *textToSet, short len){

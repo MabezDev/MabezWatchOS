@@ -41,12 +41,15 @@ void setup() {
   newNotification("Whassup this is evidently longer than 25 characters and quite clearly needs to go in a normal notification",104,NORMAL);
   newNotification("olleH this is evidently longer than 25 characters and quite clearly needs to go in a normal notification",104,NORMAL);
   newNotification("Lorem Ipsum is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum.",574,LARGE);
+  newNotification("Lorem DIFF1 is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum.",574,LARGE);
+  newNotification("Lorem DIFF2 is simply dummy text of the printing and typesetting industry. Lorem Ipsum has been the industry's standard dummy text ever since the 1500s, when an unknown printer took a galley of type and scrambled it to make a type specimen book. It has survived not only five centuries, but also the leap into electronic typesetting, remaining essentially unchanged. It was popularised in the 1960s with the release of Letraset sheets containing Lorem Ipsum passages, and more recently with desktop publishing software like Aldus PageMaker including versions of Lorem Ipsum.",574,LARGE);
+  
   
   printNotificationTexts();
   //printSmallArray();
   Serial.println();
 
-  removeNotification(1);
+  removeNotification(8);
 
   Serial.println();
 

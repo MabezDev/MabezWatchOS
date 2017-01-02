@@ -70,6 +70,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
     -(01/12/2016) All software functionality back to previous state, need to hook up bluetooth and figure out a good way to do our own alarms and figure out capactive touch buttons?
     -(02/12/2016) Fixed all functionality witht he RTC, checked and the main loop still receives messages perfectly, waiting for hm-11 to do a full test with the app
     -(10/12/2016) Added software alarm system, and fixed various bugs witht he previous system
+    -(01/01/2017) Added a new notification storage system that I have been working on, allows for a semi dynamic use of space, everything is still statically allocated but smaller messages are put in a small text array etc
  *
  *  Buglist:
     -midnight on the digital clock widget produces three zeros must investigate
@@ -144,6 +145,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
         - add support for holding down a button to keep increasing it
       - STM32 Buglist
         - if a <i> is not correclt ydetected the whole message is messed up, need to separate tags and maybe think about a ok packet sent back to the app
+        - After removing a notifications, all other notification titles are blank on the NOTIFICATION_MENU page - [FIXED]
 
 
  */
@@ -169,6 +171,9 @@ bool lastb_down = false;
 #define DOWN_OK  (OK_ONLY|DOWN_ONLY)
 #define ALL_THREE (UP_ONLY|OK_ONLY|DOWN_ONLY)
 #define NONE_OF_THEM  0
+
+#define FONT_WIDTH 5
+#define FONT_HEIGHT 7 
 
 #define isButtonPressed(pin)  (digitalRead(pin) == LOW) //this was old with buttons
 //#define isButtonPressed(pin) (touchRead(pin) > TOUCH_THRESHOLD)
@@ -238,8 +243,23 @@ struct Notification{
   char title[15];
   short dateReceived[2];
   short textLength;
-  char text[250];
+  //char text[250];
+  char *textPointer; //points to a char array containing the text, replaces the raw text
+  short textType; // used to find or remove in the correct array
 };
+
+const short SMALL = 0;
+const short NORMAL = 1;
+const short LARGE = 2;
+
+const short MSG_SIZE[3] = {25,200,750};
+short textIndexes[3] = {0,0,0};
+
+char SmallText[50][25];
+char NormalText[25][200];
+char LargeText[5][750];
+
+void *types[3] = {SmallText,NormalText,LargeText}; // store a pointer of each matrix, later to be casted to a char *
 
 //notification vars
 short notificationIndex = 0;
@@ -269,7 +289,6 @@ const short PROGMEM ALERT = 10;
 
 //UI constants
 const short PROGMEM MENU_ITEM_HEIGHT = 16;
-const short PROGMEM FONT_HEIGHT = 12; //need to add this to the y for all DrawStr functions
 
 //navigation vars
 short pageIndex = 0;
@@ -383,7 +402,7 @@ const byte PROGMEM CHARGED[] = {
 void setup(void) {
   Serial.begin(9600);
   
-  //while(!Serial.isConnected());
+  while(!Serial.isConnected());
   
   HWSERIAL.begin(9600);
 
@@ -433,7 +452,7 @@ void setup(void) {
   //<i> we can always add more payloads
   //<i> with the data interval tag
   //<f>                                        - finsih with the <f> tag
-  getNotification("<n>com.mabezdev<t>Hello<e>Test Message this 2nd payloads data<e>",64);
+  getNotification("<n>com.mabezdev<t>HelloLongTit<e>Test Message this 2nd payloads data",64);
 }
 
 void drawStr(int x, int y, char const* text){
@@ -578,6 +597,14 @@ void updateSystem(){
     
     Serial.print(F("Number of Notifications: "));
     Serial.println(notificationIndex);
+    Serial.println("Distribution: ");
+    Serial.print("Small: ");
+    Serial.print(textIndexes[0]);
+    Serial.print(", Normal: ");
+    Serial.print(textIndexes[1]);
+    Serial.print(", Large: ");
+    Serial.println(textIndexes[2]);
+    
     Serial.print(F("Time: "));
     Serial.print(clockArray[0]);
     Serial.print(F(":"));
@@ -1005,38 +1032,19 @@ void settingsMenuItem(short position){
 
 
 void notificationFullPage(short chosenNotification){
-  short lines = 0;
-  charIndex = 0; //make sure we rest index
-
-  short textLength = notifications[chosenNotification].textLength;
-  /*char *ptr = notifications[chosenNotification].text;
-  while(*ptr != '\0'){
-    textLength++;
-    ptr++;
-  }*/
   
-  if(textLength > charsThatFit){
-    for(short i=0; i < textLength; i++){
-      if((charIndex >= charsThatFit) || i == (textLength - 1)){ // i == textLength so we catch what we ahve of a line if we dont have a complete line
-        lineBuffer[charIndex] = notifications[chosenNotification].text[i]; //catch the last char
-        drawStr(0,lines * 10  + Y_OFFSET, lineBuffer); //draw the line
-        lines++;
-        charIndex = 0;
-      } else {
-        lineBuffer[charIndex] = notifications[chosenNotification].text[i];
-        charIndex++;
-      }
-      memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
-    }
-  } else {
-    drawStr(0,FONT_HEIGHT,notifications[chosenNotification].text);
-    lines++;
-  }
-  lineCount = (lines); //- 1);
+  // Calculate lines based on text length so our input handler know how to change Y_OFFSET
+  lineCount = (notifications[chosenNotification].textLength / 24) + 1; // 24 charaters per line default font of 5x7
+  
+  // this is all we need to print the notification text with the new style, the sh1106 lib takes care of the wrapping for us
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0, Y_OFFSET);
+  display.print(notifications[chosenNotification].textPointer);
+
+  //DEBUG
   intTo2Chars(lineCount);
   drawStr(64,50 ,numberBuffer);
-  //drawStr(30, 50, textLength);
-  memset(lineBuffer,0,sizeof(lineBuffer)); //reset the buffer we only do this because if a line is not 20 chars long the previos lines chars will be displayed
 }
 
 void homePage(short hour, short minute,short second){
@@ -1540,11 +1548,18 @@ void getWeatherData(char weatherItem[],short len){
 // <n>com.mabezdev<t>Hello<e>Test you cunty<i>askhjdgahkjshdgasd<e>
 
 void getNotification(char notificationItem[],short len){
+  Serial.println("Recieved from Serial: ");
+  char *printPtr = notificationItem;
+  for(int i=0; i < len; i++){
+    Serial.print(*(printPtr++));
+  }
+  Serial.println();
   //split the <n>
   char *notPtr = notificationItem;
   notPtr+=3; //'removes' the first 3 characters
   short index = 0;
   short charIndex = 0;
+  short textSum = 3;
   for(short i=0; i < len;i++){
     char c = *notPtr; //dereferences point to find value
     if(c=='<'){
@@ -1560,25 +1575,62 @@ void getNotification(char notificationItem[],short len){
         notifications[notificationIndex].title[charIndex] = c;
         charIndex++;
       } else if(index==2){
-        notifications[notificationIndex].text[charIndex] = c;
-        charIndex++;
+        notifications[notificationIndex].textLength =  (len - textSum) - 7; // - removes all ending chars
+        notifications[notificationIndex].textType = determineType(notifications[notificationIndex].textLength);
+        addTextToNotification(&notifications[notificationIndex],notPtr,notifications[notificationIndex].textLength);
+        //charIndex++;
+        break;
       }
     }
     notPtr++; //move along
+    textSum++;
   }
   //finally get the timestamp of whenwe recieved the notification
   notifications[notificationIndex].dateReceived[0] = clockArray[0];
   notifications[notificationIndex].dateReceived[1] = clockArray[1];
 
-  notifications[notificationIndex].textLength = charIndex;
-
   Serial.print(F("Notification title: "));
   Serial.println(notifications[notificationIndex].title);
   Serial.print(F("Notification text: "));
-  Serial.println(notifications[notificationIndex].text);
+  Serial.println(notifications[notificationIndex].textPointer);
   Serial.print("Text length: ");
   Serial.println(notifications[notificationIndex].textLength);
+
+  // dont forget to increment the index
   notificationIndex++;
+}
+
+uint8_t determineType(int len){
+  if(len < 25){
+    return 0;
+  } else if(len < 200){
+    return 1;
+  } else {
+    return 2;
+  }
+}
+
+void addTextToNotification(Notification *notification, char *textToSet, short len){
+  // gives us the location to start writing our new text
+  char *textPointer = (char*)(types[notification->textType]); //pointer to the first element in the respective array, i.e Small, Normal Large
+  /*
+   * Move the pointer along an element at a time using the MSG_SIZE array to get the size of an element based on type, 
+   * then times that by the index we want to add the text to
+   */
+  textPointer += (MSG_SIZE[notification->textType] * textIndexes[notification->textType]);
+  // write the text to the new found location
+  setText(textToSet, textPointer, len);
+  // store a reference to the textpointer for later removal
+  notification->textPointer = textPointer;
+  notification->textLength = len;
+
+//  Serial.print("Index for type ");
+//  Serial.print(notification->textType);
+//  Serial.print(" is ");
+//  Serial.println(textIndexes[notification->textType]);
+  
+  textIndexes[notification->textType]++; //increment the respective index
+  
 }
 
 
@@ -1848,23 +1900,60 @@ void resetTransmissionVariables(){
   transmissionSuccess = false;
 }
 
+
 void removeNotification(short pos){
   if ( pos >= notificationIndex + 1 ){
     Serial.println(F("Can't delete notification."));
   } else {
     //need to zero out the array or stray chars will overlap with notifications
-    memset(notifications[pos].text,0,sizeof(notifications[pos].text));
     memset(notifications[pos].title,0,sizeof(notifications[pos].title));
     memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
-    for ( short c = pos ; c < (notificationIndex - 1) ; c++ ){
+    removeTextFromNotification(&notifications[pos]);
+    for ( short c = pos; c < (notificationIndex - 1) ; c++ ){
        notifications[c] = notifications[c+1];
     }
-    Serial.print(F("Removed notification at position: "));
+    Serial.print(F("Removed notification at index: "));
     Serial.println(pos);
     //lower the index
     notificationIndex--;
   }
 }
+
+void removeTextFromNotification(Notification *notification){
+  char *arrIndexPtr = (char*)(types[notification->textType]); // find the begining of the respective array, i.e SMALL,NORMAL,LARGE
+  for(int i=0; i < textIndexes[notification->textType];i++){ // look through all valid elements
+    if((notification->textPointer - arrIndexPtr) == 0){ // more 'safe way' of comparing pointers to avoid compiler optimisations
+      Serial.print("Found the text to be wiped at index ");
+      Serial.print(i);
+      Serial.print(" in array of type ");
+      Serial.println(notification->textType);
+      for ( short c = i ; c < (textIndexes[notification->textType] - 1) ; c++ ){
+        // move each block into the index before it, basically Array[c] = Array[c+1], but done soley using memory modifying methods
+         memcpy((char*)(types[notification->textType]) + (c * MSG_SIZE[notification->textType]),(char*)(types[notification->textType]) + ((c+1) *  MSG_SIZE[notification->textType]), MSG_SIZE[notification->textType]);
+      }
+      textIndexes[notification->textType]--; // remeber to decrease the index once we have removed it
+    }
+    arrIndexPtr += MSG_SIZE[notification->textType]; // if we haven't found our pointer, move the next elemnt by moving our pointer along
+  }
+}
+
+//void removeNotification(short pos){
+//  if ( pos >= notificationIndex + 1 ){
+//    Serial.println(F("Can't delete notification."));
+//  } else {
+//    //need to zero out the array or stray chars will overlap with notifications
+//    memset(notifications[pos].textPointer,0,sizeof(notifications[pos].textPointer));
+//    memset(notifications[pos].title,0,sizeof(notifications[pos].title));
+//    memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
+//    for ( short c = pos ; c < (notificationIndex - 1) ; c++ ){
+//       notifications[c] = notifications[c+1];
+//    }
+//    Serial.print(F("Removed notification at position: "));
+//    Serial.println(pos);
+//    //lower the index
+//    notificationIndex--;
+//  }
+//}
 
 float getBatteryVoltage(){ // depreciated soon, will be using MAX17043
   /*
@@ -1883,6 +1972,15 @@ float getBatteryVoltage(){ // depreciated soon, will be using MAX17043
 /*
 * Utility methods
 */
+
+void setText(char* c, char* textPtr, short len){
+  int i = 0;
+  while(i < len){
+    // set the actual array value to the next value in the setText String
+    *(textPtr++) = *(c++);
+    i++;
+  }
+}
 
 //This function will write a 4 byte (32bit) long to the eeprom at
 //the specified address to address + 3.

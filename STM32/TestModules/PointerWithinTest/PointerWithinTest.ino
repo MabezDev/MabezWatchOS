@@ -49,7 +49,7 @@ void setup() {
   //printSmallArray();
   Serial.println();
 
-  removeNotification(8);
+  removeNotification(2);
 
   Serial.println();
 
@@ -116,7 +116,7 @@ void removeNotification(short pos){
     //memset(notifications[pos].title,0,sizeof(notifications[pos].title));
     //memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
     removeTextFromNotification(&notifications[pos]);
-    for ( short c = pos + 1; c < (notificationIndex - 1) ; c++ ){ // pos + 1 not entirely sure why
+    for ( short c = pos; c < (notificationIndex - 1) ; c++ ){
 //       Serial.print(notifications[c].textPointer);
 //       Serial.print(" now equals ");
 //       Serial.println(notifications[c+1].textPointer);

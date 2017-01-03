@@ -146,6 +146,7 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
       - STM32 Buglist
         - if a <i> is not correclt ydetected the whole message is messed up, need to separate tags and maybe think about a ok packet sent back to the app
         - After removing a notifications, all other notification titles are blank on the NOTIFICATION_MENU page - [FIXED]
+        - sometimes removing notifications does not wipe the text! Not sure why must investigate further
 
 
  */
@@ -238,7 +239,7 @@ long prevMillis = 0;
 //  short textLength;
 //} Notification;
 
-struct Notification{
+typedef struct{
   char packageName[15];
   char title[15];
   short dateReceived[2];
@@ -246,7 +247,7 @@ struct Notification{
   //char text[250];
   char *textPointer; //points to a char array containing the text, replaces the raw text
   short textType; // used to find or remove in the correct array
-};
+} Notification;
 
 const short SMALL = 0;
 const short NORMAL = 1;
@@ -452,7 +453,7 @@ void setup(void) {
   //<i> we can always add more payloads
   //<i> with the data interval tag
   //<f>                                        - finsih with the <f> tag
-  getNotification("<n>com.mabezdev<t>HelloLongTit<e>Test Message this 2nd payloads data",64);
+  //getNotification("<n>com.mabezdev<t>HelloLongTit<e>Test Message this 2nd payloads data",64);
 }
 
 void drawStr(int x, int y, char const* text){
@@ -1920,13 +1921,17 @@ void removeNotification(short pos){
 }
 
 void removeTextFromNotification(Notification *notification){
+  Serial.print("Trying to remove text from a notification of type ");
+  bool found = false;
+  Serial.println(notification->textType);
   char *arrIndexPtr = (char*)(types[notification->textType]); // find the begining of the respective array, i.e SMALL,NORMAL,LARGE
   for(int i=0; i < textIndexes[notification->textType];i++){ // look through all valid elements
-    if((notification->textPointer - arrIndexPtr) == 0){ // more 'safe way' of comparing pointers to avoid compiler optimisations
+    if(notification->textPointer == arrIndexPtr){ // more 'safe way' of comparing pointers to avoid compiler optimisations
       Serial.print("Found the text to be wiped at index ");
       Serial.print(i);
       Serial.print(" in array of type ");
       Serial.println(notification->textType);
+      found = true;
       for ( short c = i ; c < (textIndexes[notification->textType] - 1) ; c++ ){
         // move each block into the index before it, basically Array[c] = Array[c+1], but done soley using memory modifying methods
          memcpy((char*)(types[notification->textType]) + (c * MSG_SIZE[notification->textType]),(char*)(types[notification->textType]) + ((c+1) *  MSG_SIZE[notification->textType]), MSG_SIZE[notification->textType]);
@@ -1934,6 +1939,10 @@ void removeTextFromNotification(Notification *notification){
       textIndexes[notification->textType]--; // remeber to decrease the index once we have removed it
     }
     arrIndexPtr += MSG_SIZE[notification->textType]; // if we haven't found our pointer, move the next elemnt by moving our pointer along
+  }
+  if(!found){
+    Serial.print("Failed to find the pointer for text : ");
+    Serial.println(notification->textPointer);
   }
 }
 

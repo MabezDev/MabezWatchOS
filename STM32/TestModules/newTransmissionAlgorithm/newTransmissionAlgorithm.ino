@@ -25,6 +25,10 @@ void setup() {
 //<*>n55 - this will expect a notification of length 55, the length og th packet below
 //<t>Test Title<t>Test text that will be displayed here.*
 
+//large test
+//<*>n763
+//Contrary to popular belief, Lorem Ipsum is not simply random text. It has roots in a piece of classical Latin literature from 45 BC, making it over 2000 years old. Richard McClintock, a Latin professor at Hampden-Sydney College in Virginia, looked up one of the more obscure Latin words, consectetur, from a Lorem Ipsum passage, and going through the cites of the word in classical literature, discovered the undoubtable source. Lorem Ipsum comes from sections 1.10.32 and 1.10.33 of "de Finibus Bonorum et Malorum" (The Extremes of Good and Evil) by Cicero, written in 45 BC. This book is a treatise on the theory of ethics, very popular during the Renaissance. The first line of Lorem Ipsum, "Lorem ipsum dolor sit amet..", comes from a line in section 1.10.32.
+
 void loop() {
   short payloadIndex = 0;
   while(HWSERIAL.available()){
@@ -41,7 +45,6 @@ void loop() {
     if(payloadIndex > 0){ // we have recived something
       Serial.print(F("Message: "));
       Serial.println(payload);
-      
       if(startsWith(payload,"<*>",3)){
         if(!receiving){
           Serial.println("Found a new packet initializer.");
@@ -59,20 +62,19 @@ void loop() {
         } else {
           Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for new packet.");
           completeReset();
+          HWSERIAL.println("<NEXP>"); // tell the app we weren't expecting a packet, so restart completely
         }
       } else {
-        if(receiving){
+        // there will be no more <i> tags just chunks of data continuously streamed (less than 100 bytes per payload still though)
+        if(receiving){ 
           // now we just add the text to the data till we reach the checksum length
           if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
-//             Serial.print("Adding '");
-//             Serial.print(payload);
-//             Serial.println("' to final data.");
-             for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
+            for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
               data[dataIndex] = payload[j];
               dataIndex++;
-             }
-             Serial.print("Current final data: ");
-             Serial.println(data);
+            }
+//            Serial.print("Current final data: ");
+//            Serial.println(data);
           } else {
             Serial.println("Error! Final data is full!");
           }
@@ -80,8 +82,10 @@ void loop() {
           Serial.println(dataIndex);
           if(dataIndex == checkSum){
             if(data[dataIndex - 1] == '*'){ // check the last chars is our checksumChar = *
+              Serial.println();
               Serial.println("End of message, final contents: ");
               Serial.println(data);
+              Serial.println();
               receiving  = false;
               transmissionSuccess = true;
             } else {
@@ -118,7 +122,7 @@ void loop() {
     dataIndex = 0; // and reset the index
     
     // finally tell the watch we are ready for a new packet
-    HWSERIAL.print("<OKAY>");
+    HWSERIAL.print("<OK>");
   }
   if(payloadIndex > 0){
     memset(payload, 0, sizeof(payload)); //reset payload for next block of text

@@ -1,10 +1,10 @@
 #include <itoa.h>
 
-#define HWSERIAL Serial //change back to Serial2 when we use bluetooth // PA2 & PA3
+#define HWSERIAL Serial2 //change back to Serial2 when we use bluetooth // PA2 & PA3
 
 
 const short MAX_DATA_LENGTH = 500; // sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
-char payload[100]; // serial read buffer for data segments(payloads)
+char payload[300]; // serial read buffer for data segments(payloads)
 char data[MAX_DATA_LENGTH];//data set buffer
 short dataIndex = 0; //index is required as we dunno when we stop
 bool transmissionSuccess = false;
@@ -34,12 +34,15 @@ void loop() {
   while(HWSERIAL.available()){
       payload[payloadIndex] = char(HWSERIAL.read()); //store char from serial command
       payloadIndex++;
-      if(payloadIndex > 99){
+      if(payloadIndex > 300){
         Serial.println(F("Error message overflow, flushing buffer and discarding message."));
+        Serial.print("Before discard: ");
+        Serial.println(payload);
         memset(payload, 0, sizeof(payload)); //resetting array
+        payloadIndex = 0;
         break;
       }
-      delay(1);
+      delay(5); // put back to 1 delay when back in the OS
   }  
   if(!HWSERIAL.available()){
     if(payloadIndex > 0){ // we have recived something
@@ -61,8 +64,7 @@ void loop() {
           HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
         } else {
           Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for new packet.");
-          completeReset();
-          HWSERIAL.println("<NEXP>"); // tell the app we weren't expecting a packet, so restart completely
+          completeReset();  // tell the app we weren't expecting a packet, so restart completely
         }
       } else {
         // there will be no more <i> tags just chunks of data continuously streamed (less than 100 bytes per payload still though)
@@ -91,12 +93,12 @@ void loop() {
             } else {
               // failed the checkSum, tell the watch to resend
               Serial.println("Checksum failed, asking App for resend.");
-              resetAndResend();
+              completeReset();
             }
           } else if(dataIndex > checkSum){
             // something has gone wrong
             Serial.println("We received more data than we were expecting, asking App for resend.");
-            resetAndResend();
+            completeReset();
           }
         }
       }
@@ -126,21 +128,23 @@ void loop() {
   }
   if(payloadIndex > 0){
     memset(payload, 0, sizeof(payload)); //reset payload for next block of text
+    payloadIndex = 0;
   }
 
 }
 
-void resetAndResend(){
-  HWSERIAL.print("<FAIL>"); // watch will resend
-  memset(data, 0, sizeof(data)); // wipe final data ready for next notification
-  dataIndex = 0; // and reset the index
-}
+//void resetAndResend(){
+//  HWSERIAL.print("<FAIL>"); // watch will resend
+//  memset(data, 0, sizeof(data)); // wipe final data ready for next notification
+//  dataIndex = 0; // and reset the index
+//}
 
 void completeReset(){
   memset(data, 0, sizeof(data)); // wipe final data ready for next notification
   dataIndex = 0; // and reset the index
   receiving  = false;
   transmissionSuccess = false;
+  HWSERIAL.print("<FAIL>");
 }
 
 

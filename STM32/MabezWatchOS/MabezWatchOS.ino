@@ -184,13 +184,13 @@ long prevButtonPressed = 0;
 
 //serial retrieval vars
 const short MAX_DATA_LENGTH = 500; // sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
-char payload[100]; // serial read buffer for data segments(payloads)
+char payload[300]; // serial read buffer for data segments(payloads)
 char data[MAX_DATA_LENGTH];//data set buffer
 short dataIndex = 0; //index is required as we dunno when we stop
 bool transmissionSuccess = false;
 bool receiving = false; // are we currently recieving data?
-bool checkingTag = false; // error checking if we recieve an incomplete tag, i.e <f> is split into '<f' and then '>' comes after
-char messageBuffer[3]; // where '<f' will get combined with '>' and checked to see if its a valid tag
+short checkSum = 0;
+char type;
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
@@ -230,15 +230,6 @@ long prevMillis = 0;
 
 //TODO: increase the size of notification text, maybe use a set of small, large and medium text sizes in a class like structure, not sure if I can do that with structs, if not I will use classes
 
-
-//notification data structure
-//typedef struct{
-//  char packageName[15];
-//  char title[15];
-//  short dateReceived[2];
-//  short textLength;
-//} Notification;
-
 typedef struct{
   char packageName[15];
   char title[15];
@@ -253,11 +244,11 @@ const short SMALL = 0;
 const short NORMAL = 1;
 const short LARGE = 2;
 
-const short MSG_SIZE[3] = {25,200,750};
+const short MSG_SIZE[3] = {25,250,750};
 short textIndexes[3] = {0,0,0};
 
 char SmallText[50][25];
-char NormalText[25][200];
+char NormalText[25][250];
 char LargeText[5][750];
 
 void *types[3] = {SmallText,NormalText,LargeText}; // store a pointer of each matrix, later to be casted to a char *
@@ -704,25 +695,24 @@ void loop(void) {
     handleInput();
 
     short payloadIndex = 0;
-    while(HWSERIAL.available()){
-      payload[payloadIndex] = char(HWSERIAL.read());//store char from serial command
+  while(HWSERIAL.available()){
+      payload[payloadIndex] = char(HWSERIAL.read()); //store char from serial command
       payloadIndex++;
-      if(payloadIndex >= 99){
-        //this message is too big something went wrong flush the message out the system and break the loop
+      if(payloadIndex > 300){
         Serial.println(F("Error message overflow, flushing buffer and discarding message."));
+        Serial.print("Before discard: ");
+        Serial.println(payload);
         memset(payload, 0, sizeof(payload)); //resetting array
-        HWSERIAL.flush();
+        payloadIndex = 0;
         break;
       }
-      delay(1);
-  }
+      //delay(1);
+      //delayMicroseconds(250);
+  }  
   if(!HWSERIAL.available()){
-    if(payloadIndex > 0){
+    if(payloadIndex > 0){ // we have recived something
       Serial.print(F("Message: "));
-      for(short i=0; i < payloadIndex; i++){
-        Serial.print(payload[i]);
-      }
-      Serial.println();
+      Serial.println(payload);
 
       // Handle connection packet from HM-11
       if(startsWith(payload,"OK",2)){
@@ -741,86 +731,74 @@ void loop(void) {
           memset(payload, 0, sizeof(payload));
       }
       
-      if(!receiving && startsWith(payload,"<",1)){
-        receiving = true;
-        //Serial.println("Receiving!");
-      }else if(receiving && (payload=="<n>" || payload=="<d>" || payload=="<w>")) { // TODO: change these to startswith
-        Serial.println(F("Message data missing, ignoring."));
-        //we never recieved the end tag of a previous message
-        resetTransmissionVariables();
-      }else if((payloadIndex < 2) && receiving){//doesn't contain a full tag and we are receiving
-        //store this message and combine the next one and check if it equals <f>
-        if(!checkingTag){
-          for(short j = 0; j < payloadIndex; j++){
-            messageBuffer[j] = payload[j];
+      if(startsWith(payload,"<*>",3)){
+        if(!receiving){
+          Serial.print("Found a new packet initializer of type ");
+          type = payload[3]; // 4th char will always be the same type
+          Serial.println(type);
+          uint8_t numChars = payloadIndex - 4;
+          char checkSumChars[numChars];
+          for(int i = 0; i < numChars; i++){
+            checkSumChars[i] = payload[i+4];
           }
-          checkingTag = true;
+          checkSum = atoi(checkSumChars);
+          Serial.print("Checksum char length: ");
+          Serial.println(checkSum);
+          receiving = true;
+          HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
         } else {
-          short currentAmount = sizeof(messageBuffer);
-          if((currentAmount + (payloadIndex + 1)) == 3){ //make sure it's a tag and it doesnt exceed the array index
-            //we have found a tag
-            for(short k = (currentAmount - 1); k < (3 - (payloadIndex + 1)); k++){
-                messageBuffer[k] = payload[k];
+          Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for new packet.");
+          completeReset(true);  // tell the app we weren't expecting a packet, so restart completely
+        }
+      } else if(startsWith(payload,"<!>",3)){
+        Serial.println("<!> detected! Reseeting transmission vars.");
+        completeReset(false);
+      } else {
+        // there will be no more <i> tags just chunks of data continuously streamed (less than 100 bytes per payload still though)
+        if(receiving){ 
+          // now we just add the text to the data till we reach the checksum length
+          if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
+            for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
+              data[dataIndex] = payload[j];
+              dataIndex++;
             }
-            //if its an <f> then we finish else we carry on
-            if(startsWith(messageBuffer,"<f>",3)){
-              Serial.println("We Found a finish tag that got corrupted!");
-              // make ready to process true cuz were done
+//            Serial.print("Current final data: ");
+//            Serial.println(data);
+          } else {
+            Serial.println("Error! Final data is full!");
+          }
+          Serial.print("Data index: ");
+          Serial.println(dataIndex);
+          if(dataIndex == checkSum){
+            if(data[dataIndex - 1] == '*'){ // check the last chars is our checksumChar = *
+//              Serial.println();
+//              Serial.println("End of message, final contents: ");
+//              Serial.println(data);
+//              Serial.println();
+              dataIndex--; // remove the * checksum char
+              data[dataIndex] = '\0'; //hard remove the * checkSum char
+              receiving  = false;
               transmissionSuccess = true;
+            } else {
+              // failed the checkSum, tell the watch to resend
+              Serial.println("Checksum failed, asking App for resend.");
+              completeReset(true);
             }
-            //reset checkingTag flag
-            checkingTag = false;
-            //reset array
-            memset(messageBuffer,0,sizeof(messageBuffer));
+          } else if(dataIndex > checkSum){
+            // something has gone wrong
+            Serial.println("We received more data than we were expecting, asking App for resend.");
+            completeReset(true);
           }
         }
       }
-
-      if(!startsWith(payload,"<f>",3)){
-        // get a reference to our payload
-        char *pldPtr = payload;
-        // if we find a data interval remove it from the final message
-        if(startsWith(payload,"<i>",3)){
-          // move pointer on to remove out first 3 chars
-          pldPtr += 3;
-        }
-        //TODO: test if this check works for edge cases
-        if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
-           // add the payload to the final data
-           while(*pldPtr != '\0'){ //'\0' is the end of string character. when we recieve things in serial we need to add this at the end
-            data[dataIndex] = *pldPtr; // *messagePtr derefereces the pointer so it points to the data
-            pldPtr++; // this increased the ptr location in this case by one, if it were an short array it would be by 4 to get the next element
-            dataIndex++;
-           }
-        } else {
-          Serial.println("Cannot append payload to final data, data corrupted or exceeded array bounds.");
-          resetTransmissionVariables();
-        }
-//          if(!((dataIndex+payloadIndex) >= MAX_DATA_LENGTH - 1)){ //check the data will fit short he char array
-//            for(short i=0; i < payloadIndex; i++){
-//              data[dataIndex] = payload[i];
-//              dataIndex++;
-//            }
-//          } else {
-//            Serial.println(F("data is full, but there was more data to add. Discarding data."));
-//            resetTransmissionVariables();
-//          }
-     } else {
-        Serial.println("Found the end of a message, ready for processing.");
-        receiving = false;
-        transmissionSuccess = true;
-      }
-      //reset index
-      memset(payload, 0, sizeof(payload)); // clears array for new payload
+      
     }
   }
 
-  // if we have data ready send it to the correct 'widget'
   if(transmissionSuccess){
-    Serial.print(F("Received: "));
-    Serial.println(data);
-    if(startsWith(data,"<n>",3)){
-      if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
+    switch(type){
+      case 'n':
+        if(notificationIndex < (notificationMax - 1)){ // 0-7 == 8
         getNotification(data,dataIndex);
         vibrate(2); //vibrate
         if(notificationIndex > (notificationMax - 2)){ //tell the app we are out of space and hold the notifications
@@ -830,15 +808,42 @@ void loop(void) {
       } else {
         Serial.println(F("Max notifications Hit."));
       }
-    } else if(startsWith(data,"<w>",3)){
-      getWeatherData(data,dataIndex);
-    } else if(startsWith(data,"<d>",3)){
-      getTimeFromDevice(data,dataIndex);
-    }
-    resetTransmissionVariables();
+        break;
+      case 'w':
+        Serial.println("Weather data processed!");
+        getWeatherData(data,dataIndex);
+        break;
+      case 'd':
+        Serial.println("Date/Time data processed!");
+        getTimeFromDevice(data,dataIndex);
+        break;
+      }
+    transmissionSuccess = false; //reset once we have given the data to the respective function
+    memset(data, 0, sizeof(data)); // wipe final data ready for next notification
+    dataIndex = 0; // and reset the index
+    
+    // finally tell the watch we are ready for a new packet
+    HWSERIAL.print("<OK>");
   }
+  
+  if(payloadIndex > 0){
+    memset(payload, 0, sizeof(payload)); //reset payload for next block of text
+    payloadIndex = 0;
+  }
+  
   // update the system
   updateSystem();
+}
+
+
+void completeReset(bool sendFail){
+  memset(data, 0, sizeof(data)); // wipe final data ready for next notification
+  dataIndex = 0; // and reset the index
+  receiving  = false;
+  transmissionSuccess = false;
+  if(sendFail){
+    HWSERIAL.print("<FAIL>");
+  }
 }
 
 /*
@@ -1509,31 +1514,38 @@ short getConfirmedInputVector()
 */
 
 void getWeatherData(char weatherItem[],short len){
-  char *weaPtr = weatherItem;
-  weaPtr+=3; //remove the tag
-  short charIndex = 0;
+  Serial.println("Recieved from Serial: ");
+  char *printPtr = weatherItem;
+  for(int i=0; i < len; i++){
+    Serial.print(*(printPtr++));
+  }
+  Serial.println();
+  
   short index = 0;
-  for(short i=0; i < len;i++){
-    char c = *weaPtr; //derefence pointer to get value in char[]
-    if(c=='<'){
-      //split the t and more the next item
-      weaPtr+=2;
+  short charIndex = 0;
+  short textCount = 0;
+  
+  char* weaPtr = weatherItem; 
+  while(*weaPtr != '\0'){
+    if(*(weaPtr) == '<' && *(weaPtr + 1) == 'i' && *(weaPtr + 2) == '>'){
+      weaPtr+=2; // on two becuase this char is one
       index++;
       charIndex = 0;
     } else {
       if(index==0){
-        weatherDay[charIndex] = c;
+        weatherDay[charIndex] = *weaPtr;
         charIndex++;
-      } else if(index==1){
-        weatherTemperature[charIndex] = c;
+      }else if(index==1){
+        weatherTemperature[charIndex] = *weaPtr;
         charIndex++;
       } else if(index==2){
-        weatherForecast[charIndex] = c;
+        weatherForecast[charIndex] = *weaPtr;
         charIndex++;
       }
     }
-    weaPtr++; //move pointer along
+    weaPtr++;
   }
+  
   Serial.print(F("Day: "));
   Serial.println(weatherDay);
   Serial.print(F("Temperature: "));
@@ -1555,37 +1567,36 @@ void getNotification(char notificationItem[],short len){
     Serial.print(*(printPtr++));
   }
   Serial.println();
-  //split the <n>
-  char *notPtr = notificationItem;
-  notPtr+=3; //'removes' the first 3 characters
+
   short index = 0;
   short charIndex = 0;
-  short textSum = 3;
-  for(short i=0; i < len;i++){
-    char c = *notPtr; //dereferences point to find value
-    if(c=='<'){
-      //split the i and more the next item
+  short textCount = 0;
+  
+  char* notPtr = notificationItem; 
+  while(*notPtr != '\0'){
+    //Serial.println(*notPtr);
+    if(*(notPtr) == '<' && *(notPtr + 1) == 'i' && *(notPtr + 2) == '>'){
       notPtr+=2; // on two becuase this char is one
       index++;
       charIndex = 0;
     } else {
       if(index==0){
-        notifications[notificationIndex].packageName[charIndex] = c;
+        notifications[notificationIndex].packageName[charIndex] = *notPtr;
         charIndex++;
       }else if(index==1){
-        notifications[notificationIndex].title[charIndex] = c;
+        notifications[notificationIndex].title[charIndex] = *notPtr;
         charIndex++;
       } else if(index==2){
-        notifications[notificationIndex].textLength =  (len - textSum) - 7; // - removes all ending chars
+        notifications[notificationIndex].textLength =  (len - textCount); 
         notifications[notificationIndex].textType = determineType(notifications[notificationIndex].textLength);
         addTextToNotification(&notifications[notificationIndex],notPtr,notifications[notificationIndex].textLength);
-        //charIndex++;
         break;
       }
     }
-    notPtr++; //move along
-    textSum++;
+    notPtr++;
+    textCount++; // used to calculate the final text size by subtracting from the length of the packet
   }
+  
   //finally get the timestamp of whenwe recieved the notification
   notifications[notificationIndex].dateReceived[0] = clockArray[0];
   notifications[notificationIndex].dateReceived[1] = clockArray[1];
@@ -1602,9 +1613,9 @@ void getNotification(char notificationItem[],short len){
 }
 
 uint8_t determineType(int len){
-  if(len < 25){
+  if(len < MSG_SIZE[0]){
     return 0;
-  } else if(len < 200){
+  } else if(len < MSG_SIZE[1]){
     return 1;
   } else {
     return 2;
@@ -1638,53 +1649,46 @@ void addTextToNotification(Notification *notification, char *textToSet, short le
 
 void getTimeFromDevice(char message[], short len){
   //sample data
-  //<d>24 04 2016 17:44:46
+  //24 04 2016 17 44 46
   Serial.print(F("Date data: "));
-  Serial.println(message);
+  for(int p = 0; p < len; p++){
+    Serial.print(message[p]);
+  }
+  Serial.println();
+  
   char buf[4];//max 2 chars
-  short charIndex = 0;
-  short dateIndex = 0;
-  short clockLoopIndex = 0;
-     bool gotDate = false;
-     for(short i = 3; i< len;i++){ // i = 3 skips first 3 chars
-      if(!gotDate){
-       if(message[i]==' '){
-          dateArray[dateIndex] = atoi(buf);
-          charIndex = 0;
-          dateIndex++;
-          if(dateIndex >= 3){
-            gotDate = true;
-            charIndex = 0;
-            memset(buf, 0, sizeof(buf));
-          }
-       } else {
-        buf[charIndex] = message[i];
-        charIndex++;
+  short index = 0;
+  short bufferIndex = 0;
+  bool switchArray = false;
 
-       }
+  for(int i = 0; i < len; i++){
+    if(message[i] == ' ' || i == (len - 1)){
+      switchArray = index >= 3;
+      if(!switchArray){
+        dateArray[index] = atoi(buf);
       } else {
-        if(message[i]==':'){
-            clockArray[clockLoopIndex] = atoi(buf); //ascii to short
-            charIndex = 0;
-            clockLoopIndex++;
-        } else {
-          buf[charIndex] = message[i];
-          charIndex++;
-        }
+        clockArray[index - 3] = atoi(buf);
       }
-     }
+      index++;
+      memset(buf,0,sizeof(buf));
+      bufferIndex = 0;
+    } else {
+      buf[bufferIndex] = message[i];
+      bufferIndex++;
+    }
+  }
      
-     //Read from the RTC
-     breakTime(rt.getTime(),tm);
-     //Compare to time from Device(only minutes and hours doesn't have to be perfect)
-     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
-        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
-        Serial.println(F("Setting the clock!"));
-     } else {
-        //if it's correct we do not have to set the RTC and we just keep using the RTC's time
-        Serial.println(F("Clock is correct already!"));
-        gotUpdatedTime = true;
-     }
+ //Read from the RTC
+ breakTime(rt.getTime(),tm);
+ //Compare to time from Device(only minutes and hours doesn't have to be perfect)
+ if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
+    setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
+    Serial.println(F("Setting the clock!"));
+ } else {
+    //if it's correct we do not have to set the RTC and we just keep using the RTC's time
+    Serial.println(F("Clock is correct already!"));
+    gotUpdatedTime = true;
+ }
 
 }
 
@@ -1893,12 +1897,6 @@ void resetBTModule(){
   delay(100); //need else the module won't see the commands as two separate ones
   HWSERIAL.print("AT+RESET"); //then reset
   createAlert("BT Module Reset.",16,0);
-}
-
-void resetTransmissionVariables(){
-  dataIndex = 0; //reset final data
-  memset(data, 0, sizeof(data)); // clears array - (When add this code to the OS we need to add the memsets to the resetTransmission() func)
-  transmissionSuccess = false;
 }
 
 

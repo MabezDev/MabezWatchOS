@@ -12,6 +12,14 @@ bool receiving = false;
 short checkSum = 0;
 char type;
 
+//weather
+
+bool weatherData = false;
+char weatherDay[4];
+char weatherTemperature[4];
+char weatherForecast[25];
+short timeWeGotWeather[2] = {0,0};
+
 // time/date
 bool gotUpdatedTime = false;
 short clockArray[3] = {0,0,0}; // HH:MM:SS
@@ -84,6 +92,24 @@ void loop() {
     if(payloadIndex > 0){ // we have recived something
       Serial.print(F("Message: "));
       Serial.println(payload);
+
+      // Handle connection packet from HM-11
+      if(startsWith(payload,"OK",2)){
+          if(startsWith(payload,"OK+C",4)){
+            isConnected = true;
+            Serial.println(F("Connected!"));
+          } else if(startsWith(payload,"OK+L",4)){
+            isConnected = false;
+            Serial.println(F("Disconnected!"));
+            //reset vars like got updated time and weather here also
+          } else {
+            //the message was broken and we have no way of knowing if we connected or not so just send the disconnect and try again manually
+            Serial.println(F("Error connecting, retry."));
+            HWSERIAL.print("AT");
+          }
+          memset(payload, 0, sizeof(payload));
+      }
+      
       if(startsWith(payload,"<*>",3)){
         if(!receiving){
           Serial.println("Found a new packet initializer.");
@@ -128,6 +154,7 @@ void loop() {
 //              Serial.println(data);
 //              Serial.println();
               dataIndex--; // remove the * checksum char
+              data[dataIndex] = '\0'; //hard remove the * checkSum char
               receiving  = false;
               transmissionSuccess = true;
             } else {
@@ -154,9 +181,11 @@ void loop() {
         break;
       case 'w':
         Serial.println("Weather data processed!");
+        getWeatherData(data,dataIndex);
         break;
       case 'd':
         Serial.println("Date/Time data processed!");
+        getDateTime(data,dataIndex);
         break;
       }
     transmissionSuccess = false; //reset once we have given the data to the respective function
@@ -180,6 +209,51 @@ void completeReset(bool sendFail){
   if(sendFail){
     HWSERIAL.print("<FAIL>");
   }
+}
+
+void getWeatherData(char weatherItem[],short len){
+  Serial.println("Recieved from Serial: ");
+  char *printPtr = weatherItem;
+  for(int i=0; i < len; i++){
+    Serial.print(*(printPtr++));
+  }
+  Serial.println();
+  
+  short index = 0;
+  short charIndex = 0;
+  short textCount = 0;
+  
+  char* weaPtr = weatherItem; 
+  while(*weaPtr != '\0'){
+    if(*(weaPtr) == '<' && *(weaPtr + 1) == 'i' && *(weaPtr + 2) == '>'){
+      weaPtr+=2; // on two becuase this char is one
+      index++;
+      charIndex = 0;
+    } else {
+      if(index==0){
+        weatherDay[charIndex] = *weaPtr;
+        charIndex++;
+      }else if(index==1){
+        weatherTemperature[charIndex] = *weaPtr;
+        charIndex++;
+      } else if(index==2){
+        weatherForecast[charIndex] = *weaPtr;
+        charIndex++;
+      }
+    }
+    weaPtr++;
+  }
+  
+  Serial.print(F("Day: "));
+  Serial.println(weatherDay);
+  Serial.print(F("Temperature: "));
+  Serial.println(weatherTemperature);
+  Serial.print(F("Forecast: "));
+  Serial.println(weatherForecast);
+  for(short l=0; l < 2; l++){
+    timeWeGotWeather[l] = clockArray[l];
+  }
+  weatherData = true;
 }
 
 
@@ -237,17 +311,64 @@ void getNotification(char notificationItem[],short len){
   Serial.println(notificationIndex);
 }
 
-
-boolean isInterval(char* ptr1){
-  char* ptr = ptr1;
-  Serial.print("Received: ");
-  Serial.print(*ptr);
-  Serial.print(" ptr++ = ");
-  Serial.println(*(ptr++));
-  if(*(ptr) == '<' && *(ptr + 1) == 'i' && *(ptr + 2) == '>'){
-    return true;
+void getDateTime(char message[], short len){
+  //sample data
+  //24 04 2016 17 44 46
+  Serial.print(F("Date data: "));
+  for(int p = 0; p < len; p++){
+    Serial.print(message[p]);
   }
-  return false;
+  Serial.println();
+  
+  char buf[4];//max 2 chars
+  short index = 0;
+  short bufferIndex = 0;
+  bool switchArray = false;
+
+  for(int i = 0; i < len; i++){
+    if(message[i] == ' ' || i == (len - 1)){
+      switchArray = index >= 3;
+      if(!switchArray){
+        dateArray[index] = atoi(buf);
+      } else {
+        clockArray[index - 3] = atoi(buf);
+      }
+      index++;
+      memset(buf,0,sizeof(buf));
+      bufferIndex = 0;
+    } else {
+      buf[bufferIndex] = message[i];
+      bufferIndex++;
+    }
+  }
+
+//  Serial.print("Date: ");
+//  for(int q = 0; q < 3; q++){
+//    Serial.print(dateArray[q]);
+//    Serial.print("/");
+//  }
+//  Serial.println();
+//
+//  Serial.print("Time: ");
+//  for(int t = 0; t < 3; t++){
+//    Serial.print(clockArray[t]);
+//    Serial.print(":");
+//  }
+//  Serial.println();
+  
+     
+//     //Read from the RTC
+//     breakTime(rt.getTime(),tm);
+//     //Compare to time from Device(only minutes and hours doesn't have to be perfect)
+//     if(!((tm.Hour == clockArray[0] && tm.Minute == clockArray[1] && dateArray[0] == tm.Day && dateArray[1] == tm.Month && dateArray[2] == tm.Year))){
+//        setClockTime(clockArray[0],clockArray[1],clockArray[2],dateArray[0],dateArray[1],dateArray[2]);
+//        Serial.println(F("Setting the clock!"));
+//     } else {
+//        //if it's correct we do not have to set the RTC and we just keep using the RTC's time
+//        Serial.println(F("Clock is correct already!"));
+//        gotUpdatedTime = true;
+//     }
+
 }
 
 

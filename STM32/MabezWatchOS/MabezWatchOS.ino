@@ -223,7 +223,7 @@ const short PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
 bool gotUpdatedTime = false;
-short clockArray[3] = {0,47,32}; // HH:MM:SS
+short clockArray[3] = {0,0,0}; // HH:MM:SS
 short dateArray[4] = {0,0,0,0}; // DD/MM/YYYY, last is Day of Week
 
 long prevMillis = 0;

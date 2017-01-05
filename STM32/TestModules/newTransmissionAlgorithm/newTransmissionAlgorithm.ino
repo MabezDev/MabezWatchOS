@@ -12,6 +12,42 @@ bool receiving = false;
 short checkSum = 0;
 char type;
 
+// time/date
+bool gotUpdatedTime = false;
+short clockArray[3] = {0,0,0}; // HH:MM:SS
+short dateArray[4] = {0,0,0,0}; // DD/MM/YYYY, last is Day of Week
+
+
+// notification stuff
+typedef struct{
+  char packageName[15];
+  char title[15];
+  short dateReceived[2];
+  short textLength;
+  //char text[250];
+  char *textPointer; //points to a char array containing the text, replaces the raw text
+  short textType; // used to find or remove in the correct array
+} Notification;
+
+const short SMALL = 0;
+const short NORMAL = 1;
+const short LARGE = 2;
+
+const short MSG_SIZE[3] = {25,200,750};
+short textIndexes[3] = {0,0,0};
+
+char SmallText[50][25];
+char NormalText[25][200];
+char LargeText[5][750];
+
+void *types[3] = {SmallText,NormalText,LargeText}; // store a pointer of each matrix, later to be casted to a char *
+
+//notification vars
+short notificationIndex = 0;
+const short notificationMax = 30; // can increase this or increase the text size as we have 20kb RAM on the STM32
+
+Notification notifications[notificationMax]; 
+
 /*
  *    ToDo:
  *  - Add a time out, if we dont recieve the data withing a timeframe then discard the packet or send fail or something
@@ -64,8 +100,11 @@ void loop() {
           HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
         } else {
           Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for new packet.");
-          completeReset();  // tell the app we weren't expecting a packet, so restart completely
+          completeReset(true);  // tell the app we weren't expecting a packet, so restart completely
         }
+      } else if(startsWith(payload,"<!>",3)){
+        Serial.println("<!> detected! Reseeting transmission vars.");
+        completeReset(false);
       } else {
         // there will be no more <i> tags just chunks of data continuously streamed (less than 100 bytes per payload still though)
         if(receiving){ 
@@ -84,21 +123,22 @@ void loop() {
           Serial.println(dataIndex);
           if(dataIndex == checkSum){
             if(data[dataIndex - 1] == '*'){ // check the last chars is our checksumChar = *
-              Serial.println();
-              Serial.println("End of message, final contents: ");
-              Serial.println(data);
-              Serial.println();
+//              Serial.println();
+//              Serial.println("End of message, final contents: ");
+//              Serial.println(data);
+//              Serial.println();
+              dataIndex--; // remove the * checksum char
               receiving  = false;
               transmissionSuccess = true;
             } else {
               // failed the checkSum, tell the watch to resend
               Serial.println("Checksum failed, asking App for resend.");
-              completeReset();
+              completeReset(true);
             }
           } else if(dataIndex > checkSum){
             // something has gone wrong
             Serial.println("We received more data than we were expecting, asking App for resend.");
-            completeReset();
+            completeReset(true);
           }
         }
       }
@@ -110,7 +150,7 @@ void loop() {
     switch(type){
       case 'n':
         Serial.println("Notification data processed!");
-        getNotification(data);
+        getNotification(data, dataIndex);
         break;
       case 'w':
         Serial.println("Weather data processed!");
@@ -132,29 +172,83 @@ void loop() {
   }
 
 }
-
-//void resetAndResend(){
-//  HWSERIAL.print("<FAIL>"); // watch will resend
-//  memset(data, 0, sizeof(data)); // wipe final data ready for next notification
-//  dataIndex = 0; // and reset the index
-//}
-
-void completeReset(){
+void completeReset(bool sendFail){
   memset(data, 0, sizeof(data)); // wipe final data ready for next notification
   dataIndex = 0; // and reset the index
   receiving  = false;
   transmissionSuccess = false;
-  HWSERIAL.print("<FAIL>");
+  if(sendFail){
+    HWSERIAL.print("<FAIL>");
+  }
 }
 
 
-void getNotification(char text[]){
-  Serial.print("Text in notification: ");
-  Serial.println(text);
+void getNotification(char notificationItem[],short len){
+  Serial.println("Recieved from Serial: ");
+  char *printPtr = notificationItem;
+  for(int i=0; i < len; i++){
+    Serial.print(*(printPtr++));
+  }
+  Serial.println();
+
+  short index = 0;
+  short charIndex = 0;
+  short textCount = 0;
+  
+  char* notPtr = notificationItem; 
+  while(*notPtr != '\0'){
+    //Serial.println(*notPtr);
+    if(*(notPtr) == '<' && *(notPtr + 1) == 'i' && *(notPtr + 2) == '>'){
+      notPtr+=2; // on two becuase this char is one
+      index++;
+      charIndex = 0;
+    } else {
+      if(index==0){
+        notifications[notificationIndex].packageName[charIndex] = *notPtr;
+        charIndex++;
+      }else if(index==1){
+        notifications[notificationIndex].title[charIndex] = *notPtr;
+        charIndex++;
+      } else if(index==2){
+        notifications[notificationIndex].textLength =  (len - textCount); 
+        //notifications[notificationIndex].textType = determineType(notifications[notificationIndex].textLength);
+        //addTextToNotification(&notifications[notificationIndex],notPtr,notifications[notificationIndex].textLength);
+        break;
+      }
+    }
+    notPtr++;
+    textCount++; // used to calculate the final text size by subtracting from the length of the packet
+  }
+  
+//  //finally get the timestamp of whenwe recieved the notification
+//  notifications[notificationIndex].dateReceived[0] = clockArray[0];
+//  notifications[notificationIndex].dateReceived[1] = clockArray[1];
+//
+  Serial.print(F("Notification title: "));
+  Serial.println(notifications[notificationIndex].title);
+//  Serial.print(F("Notification text: "));
+//  Serial.println(notifications[notificationIndex].textPointer);
+  Serial.print("Text length: ");
+  Serial.println(notifications[notificationIndex].textLength);
+
+  // dont forget to increment the index
+  notificationIndex++;
+  Serial.print("Number of notifications: ");
+  Serial.println(notificationIndex);
 }
 
 
-
+boolean isInterval(char* ptr1){
+  char* ptr = ptr1;
+  Serial.print("Received: ");
+  Serial.print(*ptr);
+  Serial.print(" ptr++ = ");
+  Serial.println(*(ptr++));
+  if(*(ptr) == '<' && *(ptr + 1) == 'i' && *(ptr + 2) == '>'){
+    return true;
+  }
+  return false;
+}
 
 
 

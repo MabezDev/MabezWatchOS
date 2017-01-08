@@ -184,7 +184,7 @@ long prevButtonPressed = 0;
 
 //serial retrieval vars
 const short MAX_DATA_LENGTH = 500; // sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
-char payload[300]; // serial read buffer for data segments(payloads)
+char payload[750]; // serial read buffer for data segments(payloads)
 char data[MAX_DATA_LENGTH];//data set buffer
 short dataIndex = 0; //index is required as we dunno when we stop
 bool transmissionSuccess = false;
@@ -698,7 +698,7 @@ void loop(void) {
   while(HWSERIAL.available()){
       payload[payloadIndex] = char(HWSERIAL.read()); //store char from serial command
       payloadIndex++;
-      if(payloadIndex > 300){
+      if(payloadIndex > 750){
         Serial.println(F("Error message overflow, flushing buffer and discarding message."));
         Serial.print("Before discard: ");
         Serial.println(payload);
@@ -706,7 +706,7 @@ void loop(void) {
         payloadIndex = 0;
         break;
       }
-      //delay(1);
+      delay(1);
       //delayMicroseconds(250);
   }  
   if(!HWSERIAL.available()){
@@ -715,6 +715,7 @@ void loop(void) {
       Serial.println(payload);
 
       // Handle connection packet from HM-11
+      // can be disabled with AT+NOTI[para1] , where para1 = 0 or 1. 
       if(startsWith(payload,"OK",2)){
           if(startsWith(payload,"OK+C",4)){
             isConnected = true;

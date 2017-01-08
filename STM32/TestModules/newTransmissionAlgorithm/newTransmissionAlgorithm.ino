@@ -9,7 +9,9 @@ char data[MAX_DATA_LENGTH];//data set buffer
 short dataIndex = 0; //index is required as we dunno when we stop
 bool transmissionSuccess = false;
 bool receiving = false;
-short checkSum = 0;
+short totalChecksum = 0;
+short expectedChecksum = 0;
+short payloadChecksum = 0;
 char type;
 
 //weather
@@ -92,36 +94,14 @@ void loop() {
     if(payloadIndex > 0){ // we have recived something
       Serial.print(F("Message: "));
       Serial.println(payload);
-
-      // Handle connection packet from HM-11
-      if(startsWith(payload,"OK",2)){
-          if(startsWith(payload,"OK+C",4)){
-            isConnected = true;
-            Serial.println(F("Connected!"));
-          } else if(startsWith(payload,"OK+L",4)){
-            isConnected = false;
-            Serial.println(F("Disconnected!"));
-            //reset vars like got updated time and weather here also
-          } else {
-            //the message was broken and we have no way of knowing if we connected or not so just send the disconnect and try again manually
-            Serial.println(F("Error connecting, retry."));
-            HWSERIAL.print("AT");
-          }
-          memset(payload, 0, sizeof(payload));
-      }
       
       if(startsWith(payload,"<*>",3)){
         if(!receiving){
           Serial.println("Found a new packet initializer.");
           type = payload[3]; // 4th char will always be the same type
-          uint8_t numChars = payloadIndex - 4;
-          char checkSumChars[numChars];
-          for(int i = 0; i < numChars; i++){
-            checkSumChars[i] = payload[i+4];
-          }
-          checkSum = atoi(checkSumChars);
-          Serial.print("Checksum char length: ");
-          Serial.println(checkSum);
+          expectedChecksum = getCheckSum(payload,payloadIndex,true);
+          Serial.print("expectedChecksum: ");
+          Serial.println(expectedChecksum);
           receiving = true;
           HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
         } else {
@@ -131,42 +111,45 @@ void loop() {
       } else if(startsWith(payload,"<!>",3)){
         Serial.println("<!> detected! Reseeting transmission vars.");
         completeReset(false);
+      } else if(startsWith(payload,"<+>",3)){
+        payloadChecksum = getCheckSum(payload,payloadIndex,false);
+        Serial.print("Found new payload with checksum: ");
+        Serial.println(payloadChecksum);
+        HWSERIAL.print("<ACK>");
       } else {
-        // there will be no more <i> tags just chunks of data continuously streamed (less than 100 bytes per payload still though)
-        if(receiving){ 
-          // now we just add the text to the data till we reach the checksum length
-          if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
-            for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
-              data[dataIndex] = payload[j];
-              dataIndex++;
-            }
-//            Serial.print("Current final data: ");
-//            Serial.println(data);
-          } else {
-            Serial.println("Error! Final data is full!");
-          }
-          Serial.print("Data index: ");
-          Serial.println(dataIndex);
-          if(dataIndex == checkSum){
-            if(data[dataIndex - 1] == '*'){ // check the last chars is our checksumChar = *
-//              Serial.println();
-//              Serial.println("End of message, final contents: ");
-//              Serial.println(data);
-//              Serial.println();
-              dataIndex--; // remove the * checksum char
-              data[dataIndex] = '\0'; //hard remove the * checkSum char
-              receiving  = false;
-              transmissionSuccess = true;
+        if(receiving){
+          // check if payload is correct
+          Serial.print("payloadIndex : ");
+          Serial.print(payloadIndex);
+          Serial.print(", payloadChecksum : ");
+          Serial.println(payloadChecksum);
+          if(payloadIndex == payloadChecksum){
+            // now we just add the text to the data till we reach the payloadCount length
+            if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
+              for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
+                data[dataIndex] = payload[j];
+                dataIndex++;
+              }
             } else {
-              // failed the checkSum, tell the watch to resend
-              Serial.println("Checksum failed, asking App for resend.");
-              completeReset(true);
+              Serial.println("Error! Final data is full!");
             }
-          } else if(dataIndex > checkSum){
-            // something has gone wrong
-            Serial.println("We received more data than we were expecting, asking App for resend.");
-            completeReset(true);
+            totalChecksum += payloadIndex;
+            // send OK
+            HWSERIAL.print("<OK>");
+          } else {
+            HWSERIAL.println("<FAIL>");
           }
+          Serial.print("totalChecksum : ");
+          Serial.print(totalChecksum);
+          Serial.print(", expectedChecksum : ");
+          Serial.println(expectedChecksum);
+          if(totalChecksum == (expectedChecksum - 1)){
+            Serial.println("End of stream, send to function now");
+            totalChecksum = 0;
+            receiving  = false;
+            transmissionSuccess = true;
+          }
+          
         }
       }
       
@@ -201,6 +184,17 @@ void loop() {
   }
 
 }
+
+short getCheckSum(char initPayload[], short pIndex, bool startPacket){
+      uint8_t startPos = startPacket ? 4 : 3;
+      uint8_t numChars = pIndex - startPos;
+      char payloadCountChars[numChars];
+      for(int i = 0; i < numChars; i++){
+        payloadCountChars[i] = initPayload[i+startPos];
+      }
+      return atoi(payloadCountChars);
+}
+
 void completeReset(bool sendFail){
   memset(data, 0, sizeof(data)); // wipe final data ready for next notification
   dataIndex = 0; // and reset the index

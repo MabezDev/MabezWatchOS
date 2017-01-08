@@ -147,6 +147,8 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
         - if a <i> is not correclt ydetected the whole message is messed up, need to separate tags and maybe think about a ok packet sent back to the app
         - After removing a notifications, all other notification titles are blank on the NOTIFICATION_MENU page - [FIXED]
         - sometimes removing notifications does not wipe the text! Not sure why must investigate further
+        - duplicate messages with new transmission alg
+        - we have a loop tie of about 170ms, during this time we can miss characters via serial, look into a separate thread for it or something to rarely miss a char
 
 
  */
@@ -162,6 +164,8 @@ bool lastb_down = false;
 #define CONFIRMATION_TIME 0 //80 change back when we go back to capactive //length in time the button has to be pressed for it to be a valid press
 #define INPUT_TIME_OUT 60000 //60 seconds
 #define TOUCH_THRESHOLD 1200 // value will change depending on the capacitance of the material
+
+long systemLoopTime = 0;
 
 //need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
 #define UP_ONLY  4
@@ -554,64 +558,66 @@ void updateSystem(){
       }
     }
 
-    Serial.println(F("=============================================="));
-    if(isConnected){
-      connectedTime++;
-      Serial.print(F("Connected for "));
-      Serial.print(connectedTime);
-      Serial.println(F(" seconds."));
-    } else {
-      Serial.print(F("Connected Status: "));
-      Serial.println(isConnected);
-      connectedTime = 0;
-    }
+//    Serial.println(F("=============================================="));
+//    if(isConnected){
+//      connectedTime++;
+//      Serial.print(F("Connected for "));
+//      Serial.print(connectedTime);
+//      Serial.println(F(" seconds."));
+//    } else {
+//      Serial.print(F("Connected Status: "));
+//      Serial.println(isConnected);
+//      connectedTime = 0;
+//    }
+//
+//    Serial.print("Battery Level: ");
+//    Serial.print(batteryPercentage);
+//    Serial.println("%");
+//
+//
+//    Serial.print("Battery Status: ");
+//    if(isCharged){
+//      Serial.println("Fully charged");
+//    } else if(isCharging){
+//      Serial.println("Charging");
+//    } else {
+//      Serial.println("Running down");
+//    }
+//
+//    Serial.print("Idle power save: ");
+//    if(idle){
+//      Serial.println("Active");
+//    } else {
+//      Serial.println("Not Active");
+//    }
+//    
+//    Serial.print(F("Number of Notifications: "));
+//    Serial.println(notificationIndex);
+//    Serial.println("Distribution: ");
+//    Serial.print("Small: ");
+//    Serial.print(textIndexes[0]);
+//    Serial.print(", Normal: ");
+//    Serial.print(textIndexes[1]);
+//    Serial.print(", Large: ");
+//    Serial.println(textIndexes[2]);
+//    
+//    Serial.print(F("Time: "));
+//    Serial.print(clockArray[0]);
+//    Serial.print(F(":"));
+//    Serial.print(clockArray[1]);
+//    Serial.print(F(":"));
+//    Serial.print(clockArray[2]);
+//    Serial.print(F("    Date: "));
+//    Serial.print(dateArray[0]);
+//    Serial.print(F("/"));
+//    Serial.print(dateArray[1]);
+//    Serial.print(F("/"));
+//    Serial.println(dateArray[2]+1970);
 
-    Serial.print("Battery Level: ");
-    Serial.print(batteryPercentage);
-    Serial.println("%");
-
-
-    Serial.print("Battery Status: ");
-    if(isCharged){
-      Serial.println("Fully charged");
-    } else if(isCharging){
-      Serial.println("Charging");
-    } else {
-      Serial.println("Running down");
-    }
-
-    Serial.print("Idle power save: ");
-    if(idle){
-      Serial.println("Active");
-    } else {
-      Serial.println("Not Active");
-    }
-    
-    Serial.print(F("Number of Notifications: "));
-    Serial.println(notificationIndex);
-    Serial.println("Distribution: ");
-    Serial.print("Small: ");
-    Serial.print(textIndexes[0]);
-    Serial.print(", Normal: ");
-    Serial.print(textIndexes[1]);
-    Serial.print(", Large: ");
-    Serial.println(textIndexes[2]);
-    
-    Serial.print(F("Time: "));
-    Serial.print(clockArray[0]);
-    Serial.print(F(":"));
-    Serial.print(clockArray[1]);
-    Serial.print(F(":"));
-    Serial.print(clockArray[2]);
-    Serial.print(F("    Date: "));
-    Serial.print(dateArray[0]);
-    Serial.print(F("/"));
-    Serial.print(dateArray[1]);
-    Serial.print(F("/"));
-    Serial.println(dateArray[2]+1970);
-
-    Serial.print(F("Free RAM:"));
-    Serial.println(FreeRam());
+//    Serial.print(F("Free RAM:"));
+//    Serial.println(FreeRam());
+    Serial.print("Loop time (ms): ");
+    Serial.println(systemLoopTime);
     Serial.println(F("=============================================="));
 
     // check alarms here
@@ -671,6 +677,9 @@ void updateSystem(){
 */
 
 void loop(void) {
+
+    long start = millis();
+    
     //start picture loop
     display.clearDisplay();
     {
@@ -768,8 +777,8 @@ void loop(void) {
           } else {
             Serial.println("Error! Final data is full!");
           }
-          Serial.print("Data index: ");
-          Serial.println(dataIndex);
+          //Serial.print("Data index: ");
+          //Serial.println(dataIndex);
           if(dataIndex == checkSum){
             if(data[dataIndex - 1] == '*'){ // check the last chars is our checksumChar = *
 //              Serial.println();
@@ -834,6 +843,8 @@ void loop(void) {
   
   // update the system
   updateSystem();
+  
+  systemLoopTime = millis() - start;
 }
 
 

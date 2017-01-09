@@ -195,6 +195,9 @@ bool transmissionSuccess = false;
 bool receiving = false; // are we currently recieving data?
 short checkSum = 0;
 char type;
+short totalChecksum = 0;
+short expectedChecksum = 0;
+short payloadChecksum = 0;
 
 //date contants
 String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
@@ -398,7 +401,7 @@ const byte PROGMEM CHARGED[] = {
 void setup(void) {
   Serial.begin(9600);
   
-  while(!Serial.isConnected());
+  // while(!Serial.isConnected());
   
   HWSERIAL.begin(9600);
 
@@ -558,64 +561,64 @@ void updateSystem(){
       }
     }
 
-//    Serial.println(F("=============================================="));
-//    if(isConnected){
-//      connectedTime++;
-//      Serial.print(F("Connected for "));
-//      Serial.print(connectedTime);
-//      Serial.println(F(" seconds."));
-//    } else {
-//      Serial.print(F("Connected Status: "));
-//      Serial.println(isConnected);
-//      connectedTime = 0;
-//    }
-//
-//    Serial.print("Battery Level: ");
-//    Serial.print(batteryPercentage);
-//    Serial.println("%");
-//
-//
-//    Serial.print("Battery Status: ");
-//    if(isCharged){
-//      Serial.println("Fully charged");
-//    } else if(isCharging){
-//      Serial.println("Charging");
-//    } else {
-//      Serial.println("Running down");
-//    }
-//
-//    Serial.print("Idle power save: ");
-//    if(idle){
-//      Serial.println("Active");
-//    } else {
-//      Serial.println("Not Active");
-//    }
-//    
-//    Serial.print(F("Number of Notifications: "));
-//    Serial.println(notificationIndex);
-//    Serial.println("Distribution: ");
-//    Serial.print("Small: ");
-//    Serial.print(textIndexes[0]);
-//    Serial.print(", Normal: ");
-//    Serial.print(textIndexes[1]);
-//    Serial.print(", Large: ");
-//    Serial.println(textIndexes[2]);
-//    
-//    Serial.print(F("Time: "));
-//    Serial.print(clockArray[0]);
-//    Serial.print(F(":"));
-//    Serial.print(clockArray[1]);
-//    Serial.print(F(":"));
-//    Serial.print(clockArray[2]);
-//    Serial.print(F("    Date: "));
-//    Serial.print(dateArray[0]);
-//    Serial.print(F("/"));
-//    Serial.print(dateArray[1]);
-//    Serial.print(F("/"));
-//    Serial.println(dateArray[2]+1970);
+    Serial.println(F("=============================================="));
+    if(isConnected){
+      connectedTime++;
+      Serial.print(F("Connected for "));
+      Serial.print(connectedTime);
+      Serial.println(F(" seconds."));
+    } else {
+      Serial.print(F("Connected Status: "));
+      Serial.println(isConnected);
+      connectedTime = 0;
+    }
 
-//    Serial.print(F("Free RAM:"));
-//    Serial.println(FreeRam());
+    Serial.print("Battery Level: ");
+    Serial.print(batteryPercentage);
+    Serial.println("%");
+
+
+    Serial.print("Battery Status: ");
+    if(isCharged){
+      Serial.println("Fully charged");
+    } else if(isCharging){
+      Serial.println("Charging");
+    } else {
+      Serial.println("Running down");
+    }
+
+    Serial.print("Idle power save: ");
+    if(idle){
+      Serial.println("Active");
+    } else {
+      Serial.println("Not Active");
+    }
+    
+    Serial.print(F("Number of Notifications: "));
+    Serial.println(notificationIndex);
+    Serial.println("Distribution: ");
+    Serial.print("Small: ");
+    Serial.print(textIndexes[0]);
+    Serial.print(", Normal: ");
+    Serial.print(textIndexes[1]);
+    Serial.print(", Large: ");
+    Serial.println(textIndexes[2]);
+    
+    Serial.print(F("Time: "));
+    Serial.print(clockArray[0]);
+    Serial.print(F(":"));
+    Serial.print(clockArray[1]);
+    Serial.print(F(":"));
+    Serial.print(clockArray[2]);
+    Serial.print(F("    Date: "));
+    Serial.print(dateArray[0]);
+    Serial.print(F("/"));
+    Serial.print(dateArray[1]);
+    Serial.print(F("/"));
+    Serial.println(dateArray[2]+1970);
+
+    Serial.print(F("Free RAM:"));
+    Serial.println(FreeRam());
     Serial.print("Loop time (ms): ");
     Serial.println(systemLoopTime);
     Serial.println(F("=============================================="));
@@ -715,8 +718,7 @@ void loop(void) {
         payloadIndex = 0;
         break;
       }
-      delay(1);
-      //delayMicroseconds(250);
+      delay(5); // 5 seems perfect
   }  
   if(!HWSERIAL.available()){
     if(payloadIndex > 0){ // we have recived something
@@ -742,63 +744,77 @@ void loop(void) {
       }
       
       if(startsWith(payload,"<*>",3)){
-        if(!receiving){
-          Serial.print("Found a new packet initializer of type ");
-          type = payload[3]; // 4th char will always be the same type
-          Serial.println(type);
-          uint8_t numChars = payloadIndex - 4;
-          char checkSumChars[numChars];
-          for(int i = 0; i < numChars; i++){
-            checkSumChars[i] = payload[i+4];
-          }
-          checkSum = atoi(checkSumChars);
-          Serial.print("Checksum char length: ");
-          Serial.println(checkSum);
-          receiving = true;
-          HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
-        } else {
-          Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for new packet.");
-          completeReset(true);  // tell the app we weren't expecting a packet, so restart completely
+        if(receiving){
+          Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for the new packet, thus discarding the old one.");
+          completeReset(false);  // tell the app we weren't expecting a packet, so restart completely
         }
-      } else if(startsWith(payload,"<!>",3)){
-        Serial.println("<!> detected! Reseeting transmission vars.");
+
+        Serial.print("Found a new packet initializer.");
+        type = payload[3]; // 4th char will always be the same type
+        Serial.print(" Type: ");
+        Serial.print(type);
+        expectedChecksum = getCheckSum(payload,payloadIndex,true);
+        Serial.print(", expectedChecksum: ");
+        Serial.println(expectedChecksum);
+        receiving = true;
+        HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
+          
+      } else if(startsWith(payload,"<!>",3)){ // currently depreciated
+        Serial.println("<!> detected! Reseting transmission vars.");
         completeReset(false);
+      } else if(startsWith(payload,"<+>",3) && receiving){
+        payloadChecksum = getCheckSum(payload,payloadIndex,false);
+        Serial.print("Found new payload with checksum: ");
+        Serial.println(payloadChecksum);
+        
+        HWSERIAL.print("<ACK>");
       } else {
-        // there will be no more <i> tags just chunks of data continuously streamed (less than 100 bytes per payload still though)
-        if(receiving){ 
-          // now we just add the text to the data till we reach the checksum length
-          if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
-            for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
-              data[dataIndex] = payload[j];
-              dataIndex++;
+        if(receiving){
+          // check if payload is correct
+//          Serial.println();
+//          Serial.print("payloadIndex : ");
+//          Serial.print(payloadIndex);
+//          Serial.print(", payloadChecksum : ");
+//          Serial.println(payloadChecksum);
+//          Serial.println();
+          if(payloadIndex == payloadChecksum){
+            // now we just add the text to the data till we reach the payloadCount length
+            if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
+              for(int j = 0; j < payloadIndex; j++){ // add the payload to the final data
+                data[dataIndex] = payload[j];
+                dataIndex++;
+              }
+            } else {
+              Serial.println("Error! Final data is full!");
             }
-//            Serial.print("Current final data: ");
-//            Serial.println(data);
+            totalChecksum += payloadIndex;
+            // send OK
+            
+            HWSERIAL.print("<OK>");
           } else {
-            Serial.println("Error! Final data is full!");
+            
+            HWSERIAL.print("<FAIL>");
           }
-          //Serial.print("Data index: ");
-          //Serial.println(dataIndex);
-          if(dataIndex == checkSum){
-            if(data[dataIndex - 1] == '*'){ // check the last chars is our checksumChar = *
-//              Serial.println();
-//              Serial.println("End of message, final contents: ");
-//              Serial.println(data);
-//              Serial.println();
+//          Serial.println();
+//          Serial.print("totalChecksum : ");
+//          Serial.print(totalChecksum);
+//          Serial.print(", expectedChecksum : ");
+//          Serial.println(expectedChecksum);
+//          Serial.println();
+          if(totalChecksum == expectedChecksum){
+            if(data[dataIndex - 1] == '*'){
+              totalChecksum = 0;
+              receiving  = false;
+
               dataIndex--; // remove the * checksum char
               data[dataIndex] = '\0'; //hard remove the * checkSum char
-              receiving  = false;
+              
               transmissionSuccess = true;
             } else {
-              // failed the checkSum, tell the watch to resend
-              Serial.println("Checksum failed, asking App for resend.");
               completeReset(true);
             }
-          } else if(dataIndex > checkSum){
-            // something has gone wrong
-            Serial.println("We received more data than we were expecting, asking App for resend.");
-            completeReset(true);
           }
+          
         }
       }
       
@@ -831,9 +847,6 @@ void loop(void) {
     transmissionSuccess = false; //reset once we have given the data to the respective function
     memset(data, 0, sizeof(data)); // wipe final data ready for next notification
     dataIndex = 0; // and reset the index
-    
-    // finally tell the watch we are ready for a new packet
-    HWSERIAL.print("<OK>");
   }
   
   if(payloadIndex > 0){
@@ -845,16 +858,28 @@ void loop(void) {
   updateSystem();
   
   systemLoopTime = millis() - start;
+  
+}
+
+short getCheckSum(char initPayload[], short pIndex, bool startPacket){
+      uint8_t startPos = startPacket ? 4 : 3;
+      uint8_t numChars = pIndex - startPos;
+      char payloadCountChars[numChars];
+      for(int i = 0; i < numChars; i++){
+        payloadCountChars[i] = initPayload[i+startPos];
+      }
+      return atoi(payloadCountChars);
 }
 
 
-void completeReset(bool sendFail){
+void completeReset(bool sendReset){
   memset(data, 0, sizeof(data)); // wipe final data ready for next notification
   dataIndex = 0; // and reset the index
+  totalChecksum = 0; // don't hold old info
   receiving  = false;
   transmissionSuccess = false;
-  if(sendFail){
-    HWSERIAL.print("<FAIL>");
+  if(sendReset){
+    HWSERIAL.print("<RESEND>");
   }
 }
 

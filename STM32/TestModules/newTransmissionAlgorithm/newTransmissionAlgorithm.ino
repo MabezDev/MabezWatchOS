@@ -76,6 +76,7 @@ void setup() {
 //Contrary to popular belief, Lorem Ipsum is not simply random text. It has roots in a piece of classical Latin literature from 45 BC, making it over 2000 years old. Richard McClintock, a Latin professor at Hampden-Sydney College in Virginia, looked up one of the more obscure Latin words, consectetur, from a Lorem Ipsum passage, and going through the cites of the word in classical literature, discovered the undoubtable source. Lorem Ipsum comes from sections 1.10.32 and 1.10.33 of "de Finibus Bonorum et Malorum" (The Extremes of Good and Evil) by Cicero, written in 45 BC. This book is a treatise on the theory of ethics, very popular during the Renaissance. The first line of Lorem Ipsum, "Lorem ipsum dolor sit amet..", comes from a line in section 1.10.32.
 
 void loop() {
+  long start = millis();
   short payloadIndex = 0;
   while(HWSERIAL.available()){
       payload[payloadIndex] = char(HWSERIAL.read()); //store char from serial command
@@ -96,22 +97,25 @@ void loop() {
       Serial.println(payload);
       
       if(startsWith(payload,"<*>",3)){
-        if(!receiving){
-          Serial.println("Found a new packet initializer.");
-          type = payload[3]; // 4th char will always be the same type
-          expectedChecksum = getCheckSum(payload,payloadIndex,true);
-          Serial.print("expectedChecksum: ");
-          Serial.println(expectedChecksum);
-          receiving = true;
-          HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
-        } else {
-          Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for new packet.");
-          completeReset(true);  // tell the app we weren't expecting a packet, so restart completely
+        if(receiving){
+          Serial.println("Recived a new packet init when we weren't expecting one. Resetting all transmission variabels for the new packet, thus discarding the old one.");
+          completeReset(false);  // tell the app we weren't expecting a packet, so restart completely
         }
-      } else if(startsWith(payload,"<!>",3)){
-        Serial.println("<!> detected! Reseeting transmission vars.");
+
+        Serial.print("Found a new packet initializer.");
+        type = payload[3]; // 4th char will always be the same type
+        Serial.print(" Type: ");
+        Serial.print(type);
+        expectedChecksum = getCheckSum(payload,payloadIndex,true);
+        Serial.print(", expectedChecksum: ");
+        Serial.println(expectedChecksum);
+        receiving = true;
+        HWSERIAL.print("<ACK>"); // send acknowledge packet, then app will send the contents to the watch
+          
+      } else if(startsWith(payload,"<!>",3)){ // currently depreciated
+        Serial.println("<!> detected! Reseting transmission vars.");
         completeReset(false);
-      } else if(startsWith(payload,"<+>",3)){
+      } else if(startsWith(payload,"<+>",3) && receiving){
         payloadChecksum = getCheckSum(payload,payloadIndex,false);
         Serial.print("Found new payload with checksum: ");
         Serial.println(payloadChecksum);
@@ -119,10 +123,12 @@ void loop() {
       } else {
         if(receiving){
           // check if payload is correct
+          Serial.println();
           Serial.print("payloadIndex : ");
           Serial.print(payloadIndex);
           Serial.print(", payloadChecksum : ");
           Serial.println(payloadChecksum);
+          Serial.println();
           if(payloadIndex == payloadChecksum){
             // now we just add the text to the data till we reach the payloadCount length
             if(dataIndex + payloadIndex < MAX_DATA_LENGTH){
@@ -137,17 +143,26 @@ void loop() {
             // send OK
             HWSERIAL.print("<OK>");
           } else {
-            HWSERIAL.println("<FAIL>");
+            HWSERIAL.print("<FAIL>");
           }
+          Serial.println();
           Serial.print("totalChecksum : ");
           Serial.print(totalChecksum);
           Serial.print(", expectedChecksum : ");
           Serial.println(expectedChecksum);
-          if(totalChecksum == (expectedChecksum - 1)){
-            Serial.println("End of stream, send to function now");
-            totalChecksum = 0;
-            receiving  = false;
-            transmissionSuccess = true;
+          Serial.println();
+          if(totalChecksum == expectedChecksum){
+            if(data[dataIndex - 1] == '*'){
+              totalChecksum = 0;
+              receiving  = false;
+
+              dataIndex--; // remove the * checksum char
+              data[dataIndex] = '\0'; //hard remove the * checkSum char
+              
+              transmissionSuccess = true;
+            } else {
+              completeReset(true);
+            }
           }
           
         }
@@ -176,13 +191,15 @@ void loop() {
     dataIndex = 0; // and reset the index
     
     // finally tell the watch we are ready for a new packet
-    HWSERIAL.print("<OK>");
+    //HWSERIAL.print("<OK>");
   }
   if(payloadIndex > 0){
     memset(payload, 0, sizeof(payload)); //reset payload for next block of text
     payloadIndex = 0;
   }
-
+  delay(270); // simulate multitasking in other functions - DO NOT COPY TO OS
+//  Serial.print("Loop time: ");
+//  Serial.println(millis() - start);
 }
 
 short getCheckSum(char initPayload[], short pIndex, bool startPacket){
@@ -195,13 +212,14 @@ short getCheckSum(char initPayload[], short pIndex, bool startPacket){
       return atoi(payloadCountChars);
 }
 
-void completeReset(bool sendFail){
+void completeReset(bool sendReset){
   memset(data, 0, sizeof(data)); // wipe final data ready for next notification
   dataIndex = 0; // and reset the index
+  totalChecksum = 0; // don't hold old info
   receiving  = false;
   transmissionSuccess = false;
-  if(sendFail){
-    HWSERIAL.print("<FAIL>");
+  if(sendReset){
+    HWSERIAL.print("<RESEND>");
   }
 }
 

@@ -845,7 +845,6 @@ void loop(void) {
         getTimeFromDevice(data,dataIndex);
         break;
       case 'r':
-        Serial.println("Removal tag reciveved successfully");
         removeNotificationById(atoi(data));
       }
     transmissionSuccess = false; //reset once we have given the data to the respective function

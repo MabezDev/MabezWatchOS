@@ -245,6 +245,7 @@ typedef struct{
   //char text[250];
   char *textPointer; //points to a char array containing the text, replaces the raw text
   short textType; // used to find or remove in the correct array
+  int id;
 } Notification;
 
 const short SMALL = 0;
@@ -1608,22 +1609,29 @@ void getNotification(char notificationItem[],short len){
   short index = 0;
   short charIndex = 0;
   short textCount = 0;
-  
+  char idBuffer[8];
   char* notPtr = notificationItem; 
+  
   while(*notPtr != '\0'){
     //Serial.println(*notPtr);
     if(*(notPtr) == '<' && *(notPtr + 1) == 'i' && *(notPtr + 2) == '>'){
+      if(index == 0){
+        notifications[notificationIndex].id = atoi(idBuffer);
+      }
       notPtr+=2; // on two becuase this char is one
       index++;
       charIndex = 0;
     } else {
-      if(index==0){
+      if(index == 0){
+        idBuffer[charIndex] = *notPtr;
+        charIndex++;
+      } else if(index==1){
         notifications[notificationIndex].packageName[charIndex] = *notPtr;
         charIndex++;
-      }else if(index==1){
+      }else if(index==2){
         notifications[notificationIndex].title[charIndex] = *notPtr;
         charIndex++;
-      } else if(index==2){
+      } else if(index==3){
         notifications[notificationIndex].textLength =  (len - textCount); 
         notifications[notificationIndex].textType = determineType(notifications[notificationIndex].textLength);
         addTextToNotification(&notifications[notificationIndex],notPtr,notifications[notificationIndex].textLength);
@@ -1644,6 +1652,8 @@ void getNotification(char notificationItem[],short len){
   Serial.println(notifications[notificationIndex].textPointer);
   Serial.print("Text length: ");
   Serial.println(notifications[notificationIndex].textLength);
+  Serial.print("Notification ID:");
+  Serial.println(notifications[notificationIndex].id);
 
   // dont forget to increment the index
   notificationIndex++;

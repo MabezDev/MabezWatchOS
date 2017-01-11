@@ -844,6 +844,9 @@ void loop(void) {
         Serial.println("Date/Time data processed!");
         getTimeFromDevice(data,dataIndex);
         break;
+      case 'r':
+        Serial.println("Removal tag reciveved successfully");
+        removeNotificationById(atoi(data));
       }
     transmissionSuccess = false; //reset once we have given the data to the respective function
     memset(data, 0, sizeof(data)); // wipe final data ready for next notification
@@ -1944,6 +1947,17 @@ void resetBTModule(){
   delay(100); //need else the module won't see the commands as two separate ones
   HWSERIAL.print("AT+RESET"); //then reset
   createAlert("BT Module Reset.",16,0);
+}
+
+void removeNotificationById(int id){
+  Serial.print("App requesting deletion of notification with ID: ");
+  Serial.println(id);
+  for(int i = 0; i < notificationIndex; i++){
+    if(notifications[i].id == id){
+      Serial.println("Found notification to delete. Removing now.");
+      removeNotification(i);
+    }
+  }
 }
 
 

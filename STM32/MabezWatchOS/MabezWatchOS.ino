@@ -1955,6 +1955,7 @@ void removeNotificationById(int id){
     if(notifications[i].id == id){
       Serial.println("Found notification to delete. Removing now.");
       removeNotification(i);
+      break; // don't remove multiple
     }
   }
 }
@@ -1967,7 +1968,8 @@ void removeNotification(short pos){
     //need to zero out the array or stray chars will overlap with notifications
     memset(notifications[pos].title,0,sizeof(notifications[pos].title));
     memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
-    removeTextFromNotification(&notifications[pos]);
+    //removeTextFromNotification(&notifications[pos]);
+    notifications[pos].textPointer = 0;
     for ( short c = pos; c < (notificationIndex - 1) ; c++ ){
        notifications[c] = notifications[c+1];
     }
@@ -1978,31 +1980,31 @@ void removeNotification(short pos){
   }
 }
 
-void removeTextFromNotification(Notification *notification){
-  Serial.print("Trying to remove text from a notification of type ");
-  bool found = false;
-  Serial.println(notification->textType);
-  char *arrIndexPtr = (char*)(types[notification->textType]); // find the begining of the respective array, i.e SMALL,NORMAL,LARGE
-  for(int i=0; i < textIndexes[notification->textType];i++){ // look through all valid elements
-    if(notification->textPointer == arrIndexPtr){ // more 'safe way' of comparing pointers to avoid compiler optimisations
-      Serial.print("Found the text to be wiped at index ");
-      Serial.print(i);
-      Serial.print(" in array of type ");
-      Serial.println(notification->textType);
-      found = true;
-      for ( short c = i ; c < (textIndexes[notification->textType] - 1) ; c++ ){
-        // move each block into the index before it, basically Array[c] = Array[c+1], but done soley using memory modifying methods
-         memcpy((char*)(types[notification->textType]) + (c * MSG_SIZE[notification->textType]),(char*)(types[notification->textType]) + ((c+1) *  MSG_SIZE[notification->textType]), MSG_SIZE[notification->textType]);
-      }
-      textIndexes[notification->textType]--; // remeber to decrease the index once we have removed it
-    }
-    arrIndexPtr += MSG_SIZE[notification->textType]; // if we haven't found our pointer, move the next elemnt by moving our pointer along
-  }
-  if(!found){
-    Serial.print("Failed to find the pointer for text : ");
-    Serial.println(notification->textPointer);
-  }
-}
+//void removeTextFromNotification(Notification *notification){
+//  Serial.print("Trying to remove text from a notification of type ");
+//  bool found = false;
+//  Serial.println(notification->textType);
+//  char *arrIndexPtr = (char*)(types[notification->textType]); // find the begining of the respective array, i.e SMALL,NORMAL,LARGE
+//  for(int i=0; i < textIndexes[notification->textType];i++){ // look through all valid elements
+//    if((notification->textPointer - arrIndexPtr) == 0){ // more 'safe way' of comparing pointers to avoid compiler optimisations
+//      Serial.print("Found the text to be wiped at index ");
+//      Serial.print(i);
+//      Serial.print(" in array of type ");
+//      Serial.println(notification->textType);
+//      found = true;
+//      for ( short c = i ; c < (textIndexes[notification->textType] - 1) ; c++ ){
+//        // move each block into the index before it, basically Array[c] = Array[c+1], but done soley using memory modifying methods
+//         memcpy((char*)(types[notification->textType]) + (c * MSG_SIZE[notification->textType]),(char*)(types[notification->textType]) + ((c+1) *  MSG_SIZE[notification->textType]), MSG_SIZE[notification->textType]);
+//      }
+//      textIndexes[notification->textType]--; // remeber to decrease the index once we have removed it
+//    }
+//    arrIndexPtr += MSG_SIZE[notification->textType]; // if we haven't found our pointer, move the next elemnt by moving our pointer along
+//  }
+//  if(!found){
+//    Serial.print("Failed to find the pointer for text : ");
+//    Serial.println(notification->textPointer);
+//  }
+//}
 
 //void removeNotification(short pos){
 //  if ( pos >= notificationIndex + 1 ){

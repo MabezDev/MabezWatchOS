@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <Wire.h>
 #include <RTClock.h> 
 #include <EEPROM.h>
 // #include <Time.h> not required
@@ -398,6 +399,88 @@ const byte PROGMEM CHARGED[] = {
    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x0f, 0x24, 0x09, 0x24, 0x19,
    0x24, 0x19, 0x24, 0x09, 0xfc, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
  };
+
+/* Function prototypes */
+short readFromEEPROM(short address);
+long EEPROMReadlong(long address);
+void EEPROMWritelong(int address, long value);
+
+void breakTime(uint32_t timeInput, struct TimeElements &tm);
+uint32_t makeTime(struct TimeElements &tm);
+void createAlert(char const* text,short len, short vibrationTime);
+
+void saveToEEPROM(short address,short value);
+void vibrate(short vibrationTime);
+void drawTriangle(short x, short y, short size, short direction);
+void setClockTime(short hours,short minutes,short seconds, short days, short months, short years);
+short getCheckSum(char initPayload[], short pIndex, bool startPacket);
+void completeReset(bool sendReset);
+
+/*
+* System methods
+*/
+
+void setAlarm(short alarmType, short hours, short minutes, short date,short month,short year);
+void vibrate(short vibrationTime);
+void drawTriangle(short x, short y, short size, short direction);
+void setClockTime(short hours,short minutes,short seconds, short days, short months, short years);
+void resetBTModule();
+void removeNotificationById(int id);
+void removeNotification(short pos);
+float getBatteryVoltage();
+void setText(char* c, char* textPtr, short len);
+
+/*
+* Input handling methods
+*/
+
+void handleInput();
+void handleDualClick();
+void handleUpInput();
+void menuUp(short size);
+void menuDown();
+void handleDownInput();
+void handleOkInput();
+short getConfirmedInputVector();
+
+/*
+* Page Methods
+*/
+
+void alarmPage();
+void homePage(short hour, short minute,short second);
+void timerPage();
+void drawSelectors(short index);
+void alertPage();
+void notificationMenuPage();
+void settingsPage();
+void notificationMenuPageItem(short position);
+void settingsMenuItem(short position);
+void notificationFullPage(short chosenNotification);
+void homePage(short hour, short minute,short second);
+
+/*
+* Home page widgets
+*/
+
+void timeDateWidget();
+void digitalClockWidget();
+void weatherWidget();
+
+/*
+* Data Proccessing methods.
+*/
+
+void getWeatherData(char weatherItem[],short len);
+void getNotification(char notificationItem[],short len);
+uint8_t determineType(int len);
+void addTextToNotification(Notification *notification, char *textToSet, short len);
+void getTimeFromDevice(char message[], short len);
+
+short FreeRam();
+void intTo2Chars(short number);
+bool startsWith(char data[], char charSeq[], short len);
+bool contains(char data[], char character, short lenOfData);
 
 void setup(void) {
   Serial.begin(9600);
@@ -1245,10 +1328,6 @@ void weatherWidget(){
   }
 }
 
-/*
-* Input handling methods
-*/
-
 void handleInput(){
   short  vector = getConfirmedInputVector();
    if(vector!=lastVector){
@@ -1597,8 +1676,6 @@ void getWeatherData(char weatherItem[],short len){
   }
   weatherData = true;
 }
-
-// <n>com.mabezdev<t>Hello<e>Test you cunty<i>askhjdgahkjshdgasd<e>
 
 void getNotification(char notificationItem[],short len){
   Serial.println("Recieved from Serial: ");
@@ -2054,35 +2131,33 @@ void setText(char* c, char* textPtr, short len){
 //This function will write a 4 byte (32bit) long to the eeprom at
 //the specified address to address + 3.
 void EEPROMWritelong(int address, long value)
-      {
-      //Decomposition from a long to 4 bytes by using bitshift.
-      //One = Most significant -> Four = Least significant byte
-      byte four = (value & 0xFF);
-      byte three = ((value >> 8) & 0xFF);
-      byte two = ((value >> 16) & 0xFF);
-      byte one = ((value >> 24) & 0xFF);
+{
+//Decomposition from a long to 4 bytes by using bitshift.
+//One = Most significant -> Four = Least significant byte
+byte four = (value & 0xFF);
+byte three = ((value >> 8) & 0xFF);
+byte two = ((value >> 16) & 0xFF);
+byte one = ((value >> 24) & 0xFF);
 
-      //Write the 4 bytes into the eeprom memory.
-      EEPROM.write(address, four);
-      EEPROM.write(address + 1, three);
-      EEPROM.write(address + 2, two);
-      EEPROM.write(address + 3, one);
-      }
+//Write the 4 bytes into the eeprom memory.
+EEPROM.write(address, four);
+EEPROM.write(address + 1, three);
+EEPROM.write(address + 2, two);
+EEPROM.write(address + 3, one);
+}
 
 //This function will return a 4 byte (32bit) long from the eeprom
 //at the specified address to address + 3.
-long EEPROMReadlong(long address)
-      {
-      //Read the 4 bytes from the eeprom memory.
-      long four = EEPROM.read(address);
-      long three = EEPROM.read(address + 1);
-      long two = EEPROM.read(address + 2);
-      long one = EEPROM.read(address + 3);
+long EEPROMReadlong(long address){
+  //Read the 4 bytes from the eeprom memory.
+  long four = EEPROM.read(address);
+  long three = EEPROM.read(address + 1);
+  long two = EEPROM.read(address + 2);
+  long one = EEPROM.read(address + 3);
 
-      //Return the recomposed long by using bitshift.
-      return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
-      }
-
+  //Return the recomposed long by using bitshift.
+  return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
+}
 
 void intTo2Chars(short number){
   memset(numberBuffer,0,sizeof(numberBuffer));

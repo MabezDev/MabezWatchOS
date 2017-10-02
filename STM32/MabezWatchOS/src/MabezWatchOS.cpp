@@ -22,12 +22,12 @@
 #define SECS_PER_DAY  (SECS_PER_HOUR * 24UL)
 
 //needed for calculating Free RAM on ARM based MC's
-#ifdef __arm__
-  extern "C" char* sbrk(short incr);
-#else  // __ARM__
-  extern char *__brkval;
-  extern char __bss_end;
-#endif  // __arm__
+// #ifdef __arm__
+//   extern "C" char* sbrk(short incr);
+// #else  // __ARM__
+//   extern char *__brkval;
+//   extern char __bss_end;
+// #endif  // __arm__
 
 //u8g lib object without the c++ wrapper due to lack of support of the OLED
 //// u8g_t u8g;
@@ -2190,11 +2190,12 @@ bool contains(char data[], char character, short lenOfData){
 }
 
 short FreeRam() {
-  char top;
-  #ifdef __arm__
-    return &top - reinterpret_cast<char*>(sbrk(0));
-  #else  // __arm__
-    return __brkval ? &top - __brkval : &top - &__bss_end;
-  #endif  // __arm__
+  // char top;
+  // #ifdef __arm__
+  //   return &top - reinterpret_cast<char*>(sbrk(0));
+  // #else  // __arm__
+  //   return __brkval ? &top - __brkval : &top - &__bss_end;
+  // #endif  // __arm__
+  return 0;
 }
 

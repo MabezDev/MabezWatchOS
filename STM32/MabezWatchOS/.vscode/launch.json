@@ -6,7 +6,7 @@
             "request": "launch",
             "cwd": "${workspaceRoot}",
             "name": "PlatformIO Debugger",
-            "target": "/home/mabez/development/mabezwatch/MabezWatchOS/STM32/MabezWatchOS/.pioenvs/genericSTM32F103RB/firmware.elf",
+            "target": "/home/mabez/development/MabezWatchOS/STM32/MabezWatchOS/.pioenvs/genericSTM32F103RB/firmware.elf",
             "gdbpath": "/home/mabez/.platformio/penv/bin/piodebuggdb",
             "autorun": [ "source .pioinit" ]
         }

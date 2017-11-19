@@ -1,28 +1,13 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <RTClock.h> 
-#include <EEPROM.h>
-// #include <Time.h> not required
+#include <RTClock.h>
 #include <itoa.h>
-
-
-//fonts
-#include<Adafruit_GFX.h>
-#include "Fonts/myfont.h"
-
-// #include<MAX17043.h> // will be using this as our lipo monitor
-#include<Adafruit_SH1106.h>
 
 /* Our includes */
 #include "inc/input.h"
-
-#define HWSERIAL Serial2 //change back to Serial2 when we use bluetooth // PA2 & PA3
-
-// Leap year calulator expects year argument as years offset from 1970
-#define LEAP_YEAR(Y)  ( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
-#define SECS_PER_MIN  (60UL)
-#define SECS_PER_HOUR (3600UL)
-#define SECS_PER_DAY  (SECS_PER_HOUR * 24UL)
+#include "inc/globals.h"
+#include "inc/pin_defs.h"
+#include "inc/system.h"
 
 //needed for calculating Free RAM on ARM based MC's
 // #ifdef __arm__
@@ -34,11 +19,6 @@
 
 //u8g lib object without the c++ wrapper due to lack of support of the OLED
 //// u8g_t u8g;
-
-// display object for sh11106
-Adafruit_SH1106 display(0);
-
-RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
 
 /*
  * This has now been fully updated to the teensy LC, with an improved transmission algorithm.
@@ -157,32 +137,20 @@ RTClock rt (RTCSEL_LSE);  // Initialise RTC with LSE
 
  */
 
+// display object for sh11106
+Adafruit_SH1106 display(0);
+
+RTClock rt(RTCSEL_LSE); // Initialise RTC with LSE
+
 long systemLoopTime = 0;
-
-//need to use 4,2,1 as no combination of any of the numbers makes the same number, where as 1,2,3 1+2 = 3 so there is no individual state.
-#define UP_ONLY  4
-#define OK_ONLY  2
-#define DOWN_ONLY  1
-#define UP_OK  (UP_ONLY|OK_ONLY)
-#define UP_DOWN  (UP_ONLY|DOWN_ONLY)
-#define DOWN_OK  (OK_ONLY|DOWN_ONLY)
-#define ALL_THREE (UP_ONLY|OK_ONLY|DOWN_ONLY)
-#define NONE_OF_THEM  0
-
-#define FONT_WIDTH 5
-#define FONT_HEIGHT 7 
-
-#define isButtonPressed(pin)  (digitalRead(pin) == LOW) //this was old with buttons
-//#define isButtonPressed(pin) (touchRead(pin) > TOUCH_THRESHOLD)
-
 short lastVector = 0;
 long prevButtonPressed = 0;
 
 //serial retrieval vars
 const short MAX_DATA_LENGTH = 500; // sum off all bytes of the notification struct with 50 bytes left for message tags i.e <n>
-char payload[750]; // serial read buffer for data segments(payloads)
-char data[MAX_DATA_LENGTH];//data set buffer
-short dataIndex = 0; //index is required as we dunno when we stop
+char payload[750];                 // serial read buffer for data segments(payloads)
+char data[MAX_DATA_LENGTH];        //data set buffer
+short dataIndex = 0;               //index is required as we dunno when we stop
 bool transmissionSuccess = false;
 bool receiving = false; // are we currently recieving data?
 short checkSum = 0;
@@ -192,178 +160,39 @@ short expectedChecksum = 0;
 short payloadChecksum = 0;
 
 //date contants
-String PROGMEM months[12] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-String PROGMEM days[7] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-const short PROGMEM dayInMonth[12] = {31,28,31,30,31,30,31,31,30,31,30,31}; //does not account for leap year
-
-// time/date structure
-typedef struct TimeElements
-{ 
-  uint8_t Second; 
-  uint8_t Minute; 
-  uint8_t Hour; 
-  uint8_t Wday;   // Day of week, sunday is day 1
-  uint8_t Day;
-  uint8_t Month; 
-  uint8_t Year;   // Offset from 1970; 
-} TimeElements ; 
-
-TimeElements  tm; // real time clock time structure
+String PROGMEM months[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+String PROGMEM days[7] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
+const short PROGMEM dayInMonth[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}; //does not account for leap year
 
 //weather vars
 bool weatherData = false;
 char weatherDay[4];
 char weatherTemperature[4];
 char weatherForecast[25];
-short timeWeGotWeather[2] = {0,0};
+short timeWeGotWeather[2] = {0, 0};
 
 const short PROGMEM clockRadius = 32;
 const short PROGMEM clockUpdateInterval = 1000;
 
 //time and date vars
 bool gotUpdatedTime = false;
-short clockArray[3] = {0,0,0}; // HH:MM:SS
-short dateArray[4] = {0,0,0,0}; // DD/MM/YYYY, last is Day of Week
+short clockArray[3] = {0, 0, 0};   // HH:MM:SS
+short dateArray[4] = {0, 0, 0, 0}; // DD/MM/YYYY, last is Day of Week
 
 long prevMillis = 0;
-
-//TODO: increase the size of notification text, maybe use a set of small, large and medium text sizes in a class like structure, not sure if I can do that with structs, if not I will use classes
-
-typedef struct{
-  char packageName[15];
-  char title[15];
-  short dateReceived[2];
-  short textLength;
-  //char text[250];
-  char *textPointer; //points to a char array containing the text, replaces the raw text
-  short textType; // used to find or remove in the correct array
-  int id;
-} Notification;
 
 const short SMALL = 0;
 const short NORMAL = 1;
 const short LARGE = 2;
 
-const short MSG_SIZE[3] = {25,250,750};
-short textIndexes[3] = {0,0,0};
+const short MSG_SIZE[3] = {25, 250, 750};
+short textIndexes[3] = {0, 0, 0};
 
 char SmallText[50][25];
 char NormalText[25][250];
 char LargeText[5][750];
 
-void *types[3] = {SmallText,NormalText,LargeText}; // store a pointer of each matrix, later to be casted to a char *
-
-//notification vars
-short notificationIndex = 0;
-const short notificationMax = 30; // can increase this or increase the text size as we have 20kb RAM on the STM32
-
-Notification notifications[notificationMax]; 
-bool wantNotifications = true; // used to tell the app that we have no more room for notifications and it should hold them in a queue
-bool shouldRemove = false; //  used to remove notifications once read
-
-//pin constants - most of these will need to be adjusted for the STM32F1
-const short PROGMEM OK_BUTTON = PB3;
-const short PROGMEM DOWN_BUTTON = PB4;
-const short PROGMEM UP_BUTTON = PB5;
-const short PROGMEM BATT_READ = 0;
-const short PROGMEM VIBRATE_PIN = 10;
-const short PROGMEM CHARGING_STATUS_PIN = 9;
-const short PROGMEM BT_POWER = 21; 
-
-//navigation constants
-const short PROGMEM HOME_PAGE = 0;
-const short PROGMEM NOTIFICATION_MENU = 1;
-const short PROGMEM NOTIFICATION_BIG = 2;
-const short PROGMEM TIMER = 4;
-const short PROGMEM SETTINGS = 5;
-const short PROGMEM ALARM_PAGE = 6;
-const short PROGMEM ALERT = 10;
-
-//UI constants
-const short PROGMEM MENU_ITEM_HEIGHT = 16;
-
-//navigation vars
-short pageIndex = 0;
-short menuSelector = 0;
-short widgetSelector = 3;
-const short numberOfNormalWidgets = 6; // actually 3, 0,1,2.
-const short numberOfDebugWidgets = 1;
-short numberOfWidgets = 0;
-short numberOfPages = 6; // actually 7 (0-6 = 7)
-
-const short x = 6;
-short y = 0;
-short Y_OFFSET = 0;
-
-short lineCount = 0;
-short currentLine = 0;
-
-//batt monitoring - soon to be redundant just the charging flag required for the tp4056 led output as were using a MAX17043 dedicateed fuel gauge
-float batteryVoltage = 0;
-short batteryPercentage = 0;
-bool isCharging = false;
-bool prevIsCharging = false;
-bool isCharged = false;
-bool started = false; //flag to identify whether its the start or the end of a charge cycle
-
-
-//timer variables
-short timerArray[3] = {0,0,0}; // h/m/s
-bool isRunning = false;
-short timerIndex = 0;
-
-
-bool locked = false;
-
-//connection
-bool isConnected = false;
-short connectedTime = 0;
-
-//settings
-const short numberOfSettings = 2;
-String PROGMEM settingKey[numberOfSettings] = {"Favourite Widget:","Debug Widgets:"};
-const short PROGMEM settingValueMin[numberOfSettings] = {0,0};
-const short PROGMEM settingValueMax[numberOfSettings] = {numberOfPages,1};
-short settingValue[numberOfSettings] = {0,0}; //default
-
-//alert popup
-short lastPage = -1;
-char alertText[20]; //20 chars that fit
-short alertTextLen = 0;
-short alertVibrationCount = 0;
-bool vibrating = false;
-long prevAlertMillis = 0;
-// only supports the timestamp for one alert currently
-short alertRecieved[2] = {0,0};
-
-short loading = 3; // time the loading screen is show for
-
-//drawing buffers used for character rendering
-char numberBuffer[4]; //2 numbers //cahnged to 3 till i find what is taking 3 digits and overflowing
-const short charsThatFit = 20; //only with default font. 0-20 = 21 chars
-char lineBuffer[21]; // 21 chars                             ^^
-short charIndex = 0;
-
-//alarm vars
-typedef struct Alm {
-  short alarmTime[3] = {0,0,0};
-  uint32_t time;
-  bool active = false;
-  String name;
-} Alm;
-
-Alm alarms[2];
-TimeElements alarmTm; // used for calculating alarm time
-const short PROGMEM alarmMaxValues[3] = {23,59,6}; // 23 hours in advance, 59 minutes in advance before it increases the hours, 6 days in advance
-short alarmToggle = 0; // alarm1 = 0, alarm2 = 1
-short prevAlarmToggle = 1;
-short alarmIndex = 0;
-const short ALARM_ADDRESS = 20;//start at 20, 
-const short ALARM_DATA_LENGTH = 5; // five bytes required per alarm, 1 byte for active and 4 bytes that store a long of the alarm time in seconds
-
-//used for power saving
-bool idle = false;
-
+void *types[3] = {SmallText, NormalText, LargeText}; // store a pointer of each matrix, later to be casted to a char *
 
 //icons
 const byte PROGMEM BLUETOOTH_CONNECTED[] = {
@@ -390,49 +219,6 @@ const byte PROGMEM CHARGED[] = {
    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0x0f, 0x24, 0x09, 0x24, 0x19,
    0x24, 0x19, 0x24, 0x09, 0xfc, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
  };
-
-/* Function prototypes */
-short readFromEEPROM(short address);
-long EEPROMReadlong(long address);
-void EEPROMWritelong(int address, long value);
-
-void breakTime(uint32_t timeInput, struct TimeElements &tm);
-uint32_t makeTime(struct TimeElements &tm);
-void createAlert(char const* text,short len, short vibrationTime);
-
-void saveToEEPROM(short address,short value);
-void vibrate(short vibrationTime);
-void drawTriangle(short x, short y, short size, short direction);
-void setClockTime(short hours,short minutes,short seconds, short days, short months, short years);
-short getCheckSum(char initPayload[], short pIndex, bool startPacket);
-void completeReset(bool sendReset);
-
-/*
-* System methods
-*/
-
-void setAlarm(short alarmType, short hours, short minutes, short date,short month,short year);
-void vibrate(short vibrationTime);
-void drawTriangle(short x, short y, short size, short direction);
-void setClockTime(short hours,short minutes,short seconds, short days, short months, short years);
-void resetBTModule();
-void removeNotificationById(int id);
-void removeNotification(short pos);
-float getBatteryVoltage();
-void setText(char* c, char* textPtr, short len);
-
-/*
-* Input handling methods
-*/
-
-void handleInput();
-void handleDualClick();
-void handleUpInput();
-void menuUp(short size);
-void menuDown();
-void handleDownInput();
-void handleOkInput();
-short getConfirmedInputVector();
 
 /*
 * Page Methods
@@ -693,7 +479,7 @@ void updateSystem(){
     Serial.println(dateArray[2]+1970);
 
     Serial.print(F("Free RAM:"));
-    Serial.println(FreeRam());
+    Serial.println("FreeRam() - Not implemented");
     Serial.print("Loop time (ms): ");
     Serial.println(systemLoopTime);
     Serial.println(F("=============================================="));
@@ -1319,306 +1105,6 @@ void weatherWidget(){
   }
 }
 
-void handleInput(){
-  short  vector = getConfirmedInputVector();
-   if(vector!=lastVector){
-    // TODO: once we've clicked a new button if we keep holding it we should keep handling that event, i.e keep increasing a number if we hold the button - implement this
-      if (vector == UP_DOWN){
-        Serial.println(F("Dual click detected!"));
-        handleDualClick();
-      } else if (vector == UP_ONLY){
-        handleUpInput();
-      } else if(vector == DOWN_ONLY){
-        handleDownInput();
-      } else if(vector == OK_ONLY){
-        handleOkInput();
-      } else if(vector == ALL_THREE){
-        Serial.println(F("Return to menu Combo"));
-        pageIndex = HOME_PAGE; // take us back to the home page
-        widgetSelector = settingValue[0];// and our fav widget
-      }
-      prevButtonPressed = millis();
-      idle = false;
-    }
-      if(vector == NONE_OF_THEM){
-        if(((millis() - prevButtonPressed) > INPUT_TIME_OUT) && (prevButtonPressed != 0)){
-          Serial.println(F("Time out input"));
-          prevButtonPressed = 0;
-          pageIndex = HOME_PAGE; // take us back to the home page
-          widgetSelector = settingValue[0]; //and our fav widget
-          Y_OFFSET = 0;// reset the Y_OFFSET so if we come off a page with an offset it doesnt get bugged
-          currentLine = 0;
-          idle = true;
-        }
-      }
-    lastVector = vector;
-}
-
-void handleDualClick(){
-    // currently just return to home
-    pageIndex = HOME_PAGE;
-}
-
-void handleUpInput(){
-  Serial.println(F("Up Click Detected"));
-  if(pageIndex == HOME_PAGE){
-    widgetSelector++;
-    if(widgetSelector > numberOfWidgets){
-      widgetSelector = 0;
-    }
-  } else if(pageIndex == NOTIFICATION_MENU){
-    menuUp(notificationIndex);
-  } else if(pageIndex == NOTIFICATION_BIG){
-    if( (lineCount - currentLine) >= 6){
-    //this scrolls down
-    Y_OFFSET -= FONT_HEIGHT;
-    currentLine++;
-  }
-  } else if(pageIndex == TIMER){
-    if(locked){
-      timerArray[timerIndex]++;
-    } else {
-      timerIndex++;
-      if(timerIndex > 4){
-        timerIndex = 0;
-      }
-    }
-  } else if(pageIndex == SETTINGS){
-    //check if were locked first (changing value)
-    if(locked){
-      settingValue[menuSelector]++;
-      if(settingValue[menuSelector] > settingValueMax[menuSelector]){
-        settingValue[menuSelector] = settingValueMax[menuSelector];;
-      }
-    } else {
-      menuUp(numberOfSettings);
-    }
-  } else if(pageIndex == ALARM_PAGE){
-    if(locked){
-      alarms[alarmToggle].alarmTime[alarmIndex]++;
-      if(alarms[alarmToggle].alarmTime[alarmIndex] > alarmMaxValues[alarmIndex]){
-        alarms[alarmToggle].alarmTime[alarmIndex] = alarmMaxValues[alarmIndex];
-      }
-    } else {
-      alarmIndex++;
-      if(alarmIndex > 4){
-        alarmIndex = 0; // 3 is max
-      }
-    }
-  } else {
-    Serial.println(F("Unknown Page."));
-  }
-}
-
-void menuUp(short size){
-  menuSelector++;
-  //check here if we need scroll up to get the next items on the screen//check here if we nmeed to scroll down to get the next items
-  if((menuSelector >= 4) && (((size + 1) - menuSelector) > 0)){//0,1,2,3 = 4 items
-    //shift the y down
-    Y_OFFSET -= MENU_ITEM_HEIGHT;
-  }
-  if(menuSelector >= size){
-     //menuSelector = 0;
-     menuSelector = size;
-  }
-}
-
-void menuDown(){
-  menuSelector--;
-  if(menuSelector < 0){
-     menuSelector = 0;
-     //menuSelector = notificationIndex + 1;
-  }
-  //plus y
-  if((menuSelector >= 3)){
-    Y_OFFSET += MENU_ITEM_HEIGHT;
-  }
-}
-
-void handleDownInput(){
-  Serial.println(F("Down Click Detected"));
-  if(pageIndex == HOME_PAGE){
-    widgetSelector--;
-    if(widgetSelector < 0){
-      widgetSelector = numberOfWidgets;
-    }
-  } else if(pageIndex == NOTIFICATION_MENU){
-    menuDown();
-  } else if(pageIndex == NOTIFICATION_BIG){
-    if(currentLine > 0){
-    //scrolls back up
-    Y_OFFSET += FONT_HEIGHT;
-    currentLine--;
-  }
-  } else if(pageIndex == TIMER){
-    if(locked){
-      timerArray[timerIndex]--;
-      if(timerArray[timerIndex] < 0){
-        timerArray[timerIndex] = 0;
-      }
-    } else {
-      timerIndex--;
-      if(timerIndex < 0){
-        timerIndex = 4;
-      }
-    }
-  } else if(pageIndex == SETTINGS){
-    if(locked){
-      settingValue[menuSelector]--;
-      if(settingValue[menuSelector] < settingValueMin[menuSelector]){
-        settingValue[menuSelector] = settingValueMin[menuSelector];
-      }
-    } else {
-      menuDown();
-    }
-  } else if(pageIndex == ALARM_PAGE){
-    if(locked){
-      alarms[alarmToggle].alarmTime[alarmIndex]--;
-      if(alarms[alarmToggle].alarmTime[alarmIndex] < 0){
-        alarms[alarmToggle].alarmTime[alarmIndex] = 0;
-      }
-    } else {
-      alarmIndex--;
-      if(alarmIndex < 0){
-        alarmIndex = 4; // 3 is max
-      }
-    }
-  } else {
-    Serial.println(F("Unknown Page."));
-  }
-}
-
-void handleOkInput(){
-  Serial.println(F("OK Click Detected"));
-  if(pageIndex == HOME_PAGE){
-    if(widgetSelector == 3){
-      pageIndex = NOTIFICATION_MENU;
-    } else if(widgetSelector == 4){
-      pageIndex = TIMER;
-    } else if(widgetSelector == 5){
-      pageIndex = SETTINGS;
-    } else if(widgetSelector == 6){
-      pageIndex = ALARM_PAGE;
-    } else if(widgetSelector == 7){
-      resetBTModule();
-    }
-    Y_OFFSET = 0;
-  } else if(pageIndex == NOTIFICATION_MENU){
-    if(menuSelector != notificationIndex){//last one is the back item
-      Y_OFFSET = 0;
-      pageIndex = NOTIFICATION_BIG;
-    } else {
-      menuSelector = 0; //reset the selector
-      pageIndex = HOME_PAGE;// go back to list of notifications
-    }
-  } else if(pageIndex == NOTIFICATION_BIG){
-    shouldRemove = true;
-    if(menuSelector > 3){
-      Y_OFFSET = -1* (menuSelector - 3) * MENU_ITEM_HEIGHT; //return to place
-    } else {
-      Y_OFFSET = 0;
-    }
-    lineCount = 0;//reset number of lines
-    currentLine = 0;// reset currentLine back to zero
-    pageIndex = NOTIFICATION_MENU;
-  } else if(pageIndex == TIMER){
-    if(timerIndex==3){
-      isRunning = !isRunning; //start/stop timer
-    } else if(timerIndex == 4){
-      Serial.println(F("Resetting timer."));
-      isRunning = false;
-      timerArray[0] = 0;
-      timerArray[1] = 0;
-      timerArray[2] = 0;
-    }else {
-      locked = !locked; //lock or unlock into a digit so we can manipulate it
-    }
-  } else if(pageIndex == SETTINGS){
-    if(menuSelector==(numberOfSettings)){ //thisis the back button
-      menuSelector = 0;
-      pageIndex = HOME_PAGE;
-      //dont reset the widgetIndex to give the illusion we just came from there
-    } else {
-      locked = !locked;
-      if(!locked){
-        saveToEEPROM(menuSelector,settingValue[menuSelector]);
-      }
-    }
-  } else if(pageIndex == ALERT){
-    memset(alertText,0,sizeof(alertText)); //reset the alertText
-    alertTextLen = 0; //reset the index
-    pageIndex = lastPage; //go back
-  } else if(pageIndex == ALARM_PAGE){
-    //handle alarmInput
-    if(alarmIndex == 3){
-      alarms[alarmToggle].active = !alarms[alarmToggle].active;
-      if(alarms[alarmToggle].active){
-        if((dateArray[0] + alarms[alarmToggle].alarmTime[2]) > dayInMonth[dateArray[1] - 1]){
-          setAlarm(alarmToggle, alarms[alarmToggle].alarmTime[0], alarms[alarmToggle].alarmTime[1], ((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]),dateArray[1],dateArray[2]); // (dateArray[0] + alarmTime[2]) == current date plus the days in advance we want to set the
-          //Serial.print("Alarm set for the : ");
-          //Serial.println(((dateArray[0] + alarms[alarmToggle].alarmTime[2]) - dayInMonth[dateArray[1] - 1]));
-        } else {
-          setAlarm(alarmToggle, alarms[alarmToggle].alarmTime[0], alarms[alarmToggle].alarmTime[1], (dateArray[0] + alarms[alarmToggle].alarmTime[2]),dateArray[1],dateArray[2]);
-          //Serial.print("Alarm set for the : ");
-          //Serial.println((dateArray[0] + alarms[alarmToggle].alarmTime[2]));
-        }
-
-      }
-
-   } else if(alarmIndex == 4){
-     if(alarmToggle == 0){
-       alarmToggle = 1;
-     } else {
-       alarmToggle = 0;
-     }
-   } else {
-     locked = !locked;
-   }
-  } else {
-    Serial.println(F("Unknown Page."));
-  }
-}
-
-short getConfirmedInputVector()
-{
-  static short lastConfirmedVector = 0;
-  static short lastVector = -1;
-  static long unsigned int heldVector = 0L;
-
-  // Combine the inputs.
-  short rawVector =
-    isButtonPressed(OK_BUTTON) << 2 |
-    isButtonPressed(DOWN_BUTTON) << 1 |
-    isButtonPressed(UP_BUTTON) << 0;
-
-  /*Serial.print("Okay Button: ");
-  Serial.println(touchRead(OK_BUTTON));
-  Serial.print("Down Button: ");
-  Serial.println(touchRead(DOWN_BUTTON));
-  Serial.print("Up Button: ");
-  Serial.println(touchRead(UP_BUTTON));*/
-
-  // On a change in vector, don't return the new one!
-  if (rawVector != lastVector)
-  {
-    heldVector = millis();
-    lastVector = rawVector;
-    return lastConfirmedVector;
-  }
-
-  // We only update the confirmed vector after it has
-  // been held steady for long enough to rule out any
-  // accidental/sloppy half-presses or electric bounces.
-  //
-  long unsigned heldTime = (millis() - heldVector);
-  if (heldTime >= CONFIRMATION_TIME)
-  {
-    lastConfirmedVector = rawVector;
-  }
-
-  return lastConfirmedVector;
-}
-
 /*
 * Data Proccessing methods.
 */
@@ -1808,385 +1294,3 @@ void getTimeFromDevice(char message[], short len){
  }
 
 }
-
-/*
-* System methods
-*/
-
-void setAlarm(short alarmType, short hours, short minutes, short date,short month,short year){
-  short start = alarmType == 0 ? ALARM_ADDRESS : ALARM_ADDRESS + ALARM_DATA_LENGTH;
-//  if(alarmType == 0){
-//    RTC.setAlarm(ALM1_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
-//    Serial.println("ALARM1 Set!");
-//    start = ALARM_ADDRESS;
-//  } else {
-//    RTC.setAlarm(ALM2_MATCH_DATE, minutes, hours, date); // minutes // hours // date (28th of the month)
-//    Serial.println("ALARM2 Set!");
-//    start = ALARM_ADDRESS + 4;
-//  }
-
-  /*
-   * As our RTC not longer has alarm functionality we need to write it in software, this should be pretty simple as we already wrote the values to eeprom
-   * instead of checking if the interrupt has gone off we should just check current time/date with the alarms ones, make sure not to miss it though!
-   */
-  Serial.println("Setting alarm for: ");
-  Serial.print("Time: ");
-  Serial.print(hours);
-  Serial.print(":");
-  Serial.print(minutes);
-  Serial.println(":0");
-  Serial.print("Date: ");
-  Serial.print(date);
-  Serial.print("/");
-  Serial.print(month);
-  Serial.print("/");
-  Serial.print(year);
-  Serial.println();
-   
-  uint32_t time;
-  alarmTm.Hour = hours;
-  alarmTm.Minute = minutes;
-  alarmTm.Day = date;
-  alarmTm.Month = month;
-  alarmTm.Second = 0;
-  alarmTm.Year = year; // - 1970
-  time = makeTime(alarmTm);
-  alarms[alarmType].time = time;
-  
-  Serial.print("Alarm makeTime: ");
-  Serial.println(alarms[alarmType].time);
-  Serial.print("Starting write at address: ");
-  Serial.println(start);
-  
-  saveToEEPROM(start,true); //set alarm active
-  start++;
-  EEPROMWritelong(start,time);// need to write long
-}
-
-void createAlert(char const* text,short len, short vibrationTime){
-  if(len < 20){
-    lastPage = pageIndex;
-    alertTextLen = len;
-    for(short i =0; i < len; i++){
-      alertText[i] = text[i];
-    }
-    // set the timestamp
-    alertRecieved[0] = clockArray[0];
-    alertRecieved[1] = clockArray[1];
-    vibrate(vibrationTime);
-    pageIndex = ALERT;
-  } else {
-    Serial.println(F("Not Creating Alert, text to big!"));
-  }
-}
-
-void vibrate(short vibrationTime){
-  alertVibrationCount = (vibrationTime) * 2;// double it as we toggle vibrate twice a second
-}
-
-void saveToEEPROM(short address,short value){
-  //if(address < EEPROM.length()){
-    EEPROM.write(address,value);
-  //}
-}
-
-short readFromEEPROM(short address){
-    return EEPROM.read(address);
-}
-
-void drawTriangle(short x, short y, short size, short direction){
-  // some triangle are miss-shapen need to fix
-  switch (direction) {
-    case 1: display.drawTriangle(x,y,x+size,y, x+(size/2), y+(size/2),WHITE); /* u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y+(size/2)); */ break; //down
-    case 2: display.drawTriangle(x,y,x+size,y, x+(size/2), y-(size/2),WHITE);/* u8g_DrawTriangle(&u8g,x,y,x+size,y, x+(size/2), y-(size/2)); */ break; //up
-    case 3: display.drawTriangle(x+size,y,x,y-(size/2),x+size,y-size,WHITE);/* u8g_DrawTriangle(&u8g,x+size,y,x,y-(size/2),x+size,y-size); */ break; // left
-    case 4: display.drawTriangle(x + size,y-(size/2),x,y,x,y-size,WHITE);/* u8g_DrawTriangle(&u8g,x + size,y-(size/2),x,y,x,y-size); */ break; // right
-  }
-}
-
-void breakTime(uint32_t timeInput, struct TimeElements &tm){
-// Break the given time_t into time components
-// This is a more compact version of the C library localtime function
-// Note that year is offset from 1970 !!!
-
-  uint8_t year;
-  uint8_t month, monthLength;
-  uint32_t time;
-  unsigned long days;
-
-  time = (uint32_t)timeInput;
-  tm.Second = time % 60;
-  time /= 60; // Now it is minutes
-  tm.Minute = time % 60;
-  time /= 60; // Now it is hours
-  tm.Hour = time % 24;
-  time /= 24; // Now it is days
-  tm.Wday = ((time + 4) % 7) + 1;  // Sunday is day 1 
-  
-  year = 0;  
-  days = 0;
-  while((unsigned)(days += (LEAP_YEAR(year) ? 366 : 365)) <= time) {
-    year++;
-  }
-  tm.Year = year; // Year is offset from 1970 
-  
-  days -= LEAP_YEAR(year) ? 366 : 365;
-  time  -= days; // Now it is days in this year, starting at 0
-  
-  days=0;
-  month=0;
-  monthLength=0;
-  for (month=0; month<12; month++) {
-    if (month==1) { // February
-      if (LEAP_YEAR(year)) {
-        monthLength=29;
-      } else {
-        monthLength=28;
-      }
-    } else {
-      monthLength = dayInMonth[month];
-    }
-    
-    if (time >= monthLength) {
-      time -= monthLength;
-    } else {
-        break;
-    }
-  }
-  tm.Month = month + 1;  // Jan is month 1  
-  tm.Day = time + 1;     // Day of month
-}
-
-uint32_t makeTime(struct TimeElements &tm){   
-// Assemble time elements into "unix" format 
-// Note year argument is offset from 1970
-  
-  int i;
-  uint32_t seconds;
-
-  // Seconds from 1970 till 1 jan 00:00:00 of the given year
-  seconds= tm.Year*(SECS_PER_DAY * 365);
-  for (i = 0; i < tm.Year; i++) {
-    if (LEAP_YEAR(i)) {
-      seconds +=  SECS_PER_DAY;   // Add extra days for leap years
-    }
-  }
-  
-  // Add days for this year, months start from 1
-  for (i = 1; i < tm.Month; i++) {
-    if ( (i == 2) && LEAP_YEAR(tm.Year)) { 
-      seconds += SECS_PER_DAY * 29;
-    } else {
-      seconds += SECS_PER_DAY * dayInMonth[i-1];  // MonthDay array starts from 0
-    }
-  }
-  seconds+= (tm.Day-1) * SECS_PER_DAY;
-  seconds+= tm.Hour * SECS_PER_HOUR;
-  seconds+= tm.Minute * SECS_PER_MIN;
-  seconds+= tm.Second;
-  return (uint32_t)seconds; 
-}
-
-void setClockTime(short hours,short minutes,short seconds, short days, short months, short years){
-  tm.Hour = hours;
-  tm.Minute = minutes;
-  tm.Second = seconds;
-  tm.Day = days;
-  tm.Month = months;
-  tm.Year = years - 1970; //offset
-  Serial.print(F("Time: "));
-    Serial.print(clockArray[0]);
-    Serial.print(F(":"));
-    Serial.print(clockArray[1]);
-    Serial.print(F(":"));
-    Serial.print(clockArray[2]);
-    Serial.print(F("    Date: "));
-    Serial.print(dateArray[0]);
-    Serial.print(F("/"));
-    Serial.print(dateArray[1]);
-    Serial.print(F("/"));
-    Serial.println(dateArray[2]);
-  rt.setTime(makeTime(tm));
-}
-
-void resetBTModule(){
-  HWSERIAL.print("AT"); //disconnect
-  delay(100); //need else the module won't see the commands as two separate ones
-  HWSERIAL.print("AT+RESET"); //then reset
-  createAlert("BT Module Reset.",16,0);
-}
-
-void removeNotificationById(int id){
-  Serial.print("App requesting deletion of notification with ID: ");
-  Serial.println(id);
-  for(int i = 0; i < notificationIndex; i++){
-    if(notifications[i].id == id){
-      Serial.println("Found notification to delete. Removing now.");
-      removeNotification(i);
-      break; // don't remove multiple
-    }
-  }
-}
-
-
-void removeNotification(short pos){
-  if ( pos >= notificationIndex + 1 ){
-    Serial.println(F("Can't delete notification."));
-  } else {
-    //need to zero out the array or stray chars will overlap with notifications
-    memset(notifications[pos].title,0,sizeof(notifications[pos].title));
-    memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
-    //removeTextFromNotification(&notifications[pos]);
-    notifications[pos].textPointer = 0;
-    for ( short c = pos; c < (notificationIndex - 1) ; c++ ){
-       notifications[c] = notifications[c+1];
-    }
-    Serial.print(F("Removed notification at index: "));
-    Serial.println(pos);
-    //lower the index
-    notificationIndex--;
-  }
-}
-
-//void removeTextFromNotification(Notification *notification){
-//  Serial.print("Trying to remove text from a notification of type ");
-//  bool found = false;
-//  Serial.println(notification->textType);
-//  char *arrIndexPtr = (char*)(types[notification->textType]); // find the begining of the respective array, i.e SMALL,NORMAL,LARGE
-//  for(int i=0; i < textIndexes[notification->textType];i++){ // look through all valid elements
-//    if((notification->textPointer - arrIndexPtr) == 0){ // more 'safe way' of comparing pointers to avoid compiler optimisations
-//      Serial.print("Found the text to be wiped at index ");
-//      Serial.print(i);
-//      Serial.print(" in array of type ");
-//      Serial.println(notification->textType);
-//      found = true;
-//      for ( short c = i ; c < (textIndexes[notification->textType] - 1) ; c++ ){
-//        // move each block into the index before it, basically Array[c] = Array[c+1], but done soley using memory modifying methods
-//         memcpy((char*)(types[notification->textType]) + (c * MSG_SIZE[notification->textType]),(char*)(types[notification->textType]) + ((c+1) *  MSG_SIZE[notification->textType]), MSG_SIZE[notification->textType]);
-//      }
-//      textIndexes[notification->textType]--; // remeber to decrease the index once we have removed it
-//    }
-//    arrIndexPtr += MSG_SIZE[notification->textType]; // if we haven't found our pointer, move the next elemnt by moving our pointer along
-//  }
-//  if(!found){
-//    Serial.print("Failed to find the pointer for text : ");
-//    Serial.println(notification->textPointer);
-//  }
-//}
-
-//void removeNotification(short pos){
-//  if ( pos >= notificationIndex + 1 ){
-//    Serial.println(F("Can't delete notification."));
-//  } else {
-//    //need to zero out the array or stray chars will overlap with notifications
-//    memset(notifications[pos].textPointer,0,sizeof(notifications[pos].textPointer));
-//    memset(notifications[pos].title,0,sizeof(notifications[pos].title));
-//    memset(notifications[pos].packageName,0,sizeof(notifications[pos].packageName));
-//    for ( short c = pos ; c < (notificationIndex - 1) ; c++ ){
-//       notifications[c] = notifications[c+1];
-//    }
-//    Serial.print(F("Removed notification at position: "));
-//    Serial.println(pos);
-//    //lower the index
-//    notificationIndex--;
-//  }
-//}
-
-float getBatteryVoltage(){ // depreciated soon, will be using MAX17043
-  /*
-   * WARNING: Add voltage divider to bring batt voltage below 3.3v at all times! Do this before pluggin in the Batt or will destroy the Pin in a best case scenario
-   * and will destroy the teensy in a worst case.
-   */
-   float reads = 0;
-   for(short i=0; i<100; i++){
-    reads+= analogRead(BATT_READ);
-   }
-   // R1 = 2000, R2 = 3300
-   // Vin = (Vout * (R1 + R2)) / R2
-  return ((reads/100) * (3.3 / 1024) * (3300 + 2000))/(3300);
-}
-
-/*
-* Utility methods
-*/
-
-void setText(char* c, char* textPtr, short len){
-  int i = 0;
-  while(i < len){
-    // set the actual array value to the next value in the setText String
-    *(textPtr++) = *(c++);
-    i++;
-  }
-}
-
-//This function will write a 4 byte (32bit) long to the eeprom at
-//the specified address to address + 3.
-void EEPROMWritelong(int address, long value)
-{
-//Decomposition from a long to 4 bytes by using bitshift.
-//One = Most significant -> Four = Least significant byte
-byte four = (value & 0xFF);
-byte three = ((value >> 8) & 0xFF);
-byte two = ((value >> 16) & 0xFF);
-byte one = ((value >> 24) & 0xFF);
-
-//Write the 4 bytes into the eeprom memory.
-EEPROM.write(address, four);
-EEPROM.write(address + 1, three);
-EEPROM.write(address + 2, two);
-EEPROM.write(address + 3, one);
-}
-
-//This function will return a 4 byte (32bit) long from the eeprom
-//at the specified address to address + 3.
-long EEPROMReadlong(long address){
-  //Read the 4 bytes from the eeprom memory.
-  long four = EEPROM.read(address);
-  long three = EEPROM.read(address + 1);
-  long two = EEPROM.read(address + 2);
-  long one = EEPROM.read(address + 3);
-
-  //Return the recomposed long by using bitshift.
-  return ((four << 0) & 0xFF) + ((three << 8) & 0xFFFF) + ((two << 16) & 0xFFFFFF) + ((one << 24) & 0xFFFFFFFF);
-}
-
-void intTo2Chars(short number){
-  memset(numberBuffer,0,sizeof(numberBuffer));
-  if(number < 10){
-    //not working atm
-    numberBuffer[0] = '0';
-    numberBuffer[1] = char(number + 48);
-
-  } else {
-    itoa(number,numberBuffer,10);
-  }
-}
-
-bool startsWith(char data[], char charSeq[], short len){
-    for(short i=0; i < len; i++){
-      if(!(data[i]==charSeq[i])){
-        return false;
-      }
-    }
-    return true;
-}
-
-bool contains(char data[], char character, short lenOfData){
-  for(short i = 0; i < lenOfData; i++){
-    if(data[i] == character){
-      return true;
-    }
-  }
-  return false;
-}
-
-short FreeRam() {
-  // char top;
-  // #ifdef __arm__
-  //   return &top - reinterpret_cast<char*>(sbrk(0));
-  // #else  // __arm__
-  //   return __brkval ? &top - __brkval : &top - &__bss_end;
-  // #endif  // __arm__
-  return 0;
-}
-
